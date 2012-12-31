@@ -1,0 +1,139 @@
+/* -- page layout ----------------------------------------------------------- */
+ 
+body {
+    font-family: serif;
+    font-size: 100%;
+    background-color: white;
+    color: black;
+    margin: 0;
+}
+
+hr {
+    border: 1px solid #B1B4B6;
+}
+
+div#main {
+    margin: 0;
+}
+
+div#header {
+    margin: 0;
+    padding: 2px 2px 2px 2px;
+    background-color: #6BA81E;
+    color: white;
+    font-weight: bold;
+}
+
+div#header a {
+    color: white;
+    text-decoration: none;
+}
+
+div#header img {
+    display: inline;
+    margin: 0px 0px 0px 0px;
+}
+
+div#content {
+    margin: 0px 2em 0px 2em;
+}
+
+div#footer {
+    margin: 0;
+    margin-top: 30px;
+    padding: 4px 4px 4px 4px;
+    font-size: 90%;
+    text-align: center;
+    background-color: black;
+    color: white;
+}
+
+.source {
+    border: 1px solid #C6C9CB;
+}
+
+/* -- body styles ----------------------------------------------------------- */
+ 
+a {
+    color: #005B81;
+    text-decoration: none;
+}
+ 
+a:hover {
+    color: #E32E00;
+    text-decoration: underline;
+}
+ 
+h1,h2,h3,h4,h5,h6 {
+    font-weight: normal;
+    color: #212224;
+    margin: 30px 0px 10px 0px;
+    padding: 5px 0 5px 10px;
+    text-shadow: 0px 1px 0 white
+}
+ 
+h1 { font-size: 180%; background-color: white; font-weight: bold;  }
+h2 { font-size: 150%; background-color: #C8D5E3; }
+h3 { font-size: 120%; background-color: #D8DEE3; }
+h4 { font-size: 110%; background-color: none; border-left: 7px solid #D8DEE3; border-bottom: 1px solid #D8DEE3;}
+h5 { font-size: 100%; background-color: #000000; border-left: 7px solid #D8DEE3; }
+h6 { font-size: 100%; background-color: #000000; }
+ 
+a.headerlink {
+    color: #c60f0f;
+    font-size: 0.8em;
+    padding: 0 4px 0 4px;
+    text-decoration: none;
+}
+ 
+a.headerlink:hover {
+    background-color: #c60f0f;
+    color: white;
+}
+ 
+p, dd, li {
+    line-height: 1.5em;
+}
+
+pre {
+    font-family: monospace;
+    padding: 10px;
+    background-color: White;
+    color: #222;
+    line-height: 1.2em;
+    border: 1px solid #C6C9CB;
+    font-size: 1.1em;
+    margin: 1.5em 0 1.5em 0;
+    -webkit-box-shadow: 1px 1px 1px #d8d8d8;
+    -moz-box-shadow: 1px 1px 1px #d8d8d8;
+}
+ 
+tt {
+    background-color: #ecf0f3;
+    color: #222;
+    /* padding: 1px 2px; */
+    font-size: 1.1em;
+    font-family: monospace;
+}
+
+img {
+    border: none;
+    display: block;
+    margin: 6px auto 30px auto;
+}
+
+ul {
+    list-style-type: square;
+    padding-left: 1em;
+    margin-left: 1em;
+}
+
+code {
+    background-color: white;
+    padding-left: 4px;
+    padding-right: 4px;
+}
+
+p.caption {
+    display: none;
+}
