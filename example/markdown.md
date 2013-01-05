@@ -2,6 +2,17 @@
    template: markdown_src.j2.html
 ---
 
+# deflist
+
+
+hoge
+ : hogehoge
+
+- hoge
+-    :    hogehoge
+
+
+
 # Markdown
 
 [TOC]

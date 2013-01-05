@@ -14,6 +14,7 @@ class TitleTreeprocessor(markdown.treeprocessors.Treeprocessor):
                 yield parent, child
 
     def run(self, doc):
+        self.markdown.title = ''
         header_rgx = re.compile("[Hh][123456]")
 
         for (p, c) in self.iterparent(doc):

@@ -38,3 +38,7 @@ Mac OS X Lion, Brew's python.
     ...
     Finished processing dependencies for sitegen==1.0.0
     (env)% sitegen example -o _site
+
+for fixed Markdown,
+    
+    % pip install git+git://github.com/mizuy/Python-Markdown.git@fix_deflist#egg=Markdown
