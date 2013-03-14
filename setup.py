@@ -26,7 +26,8 @@ setup(name='sitegen',
       url='http://github.com/mizuy/sitegen',
       license='MIT',
       packages=find_packages(),
-      install_requires=['Jinja2', 'Markdown', 'PyYAML', 'Pygments'],
+      dependency_links=['https://github.com/waylan/Python-Markdown/archive/fdfc84405ba690705ff343d46ab658bfc50a8836.zip#egg=Markdown-2.3dev'],
+      install_requires=['Jinja2',  'PyYAML', 'Pygments', 'Markdown>=2.3dev'],
       entry_points=\
 """
 [console_scripts]

@@ -6,3 +6,6 @@ install:
 
 clean:
 	rm -rf _site
+
+virtualenv:
+	virtualenv env --no-site-packages

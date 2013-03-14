@@ -14,19 +14,16 @@ import errno
 from glob import glob
 import yaml
 
-
 import markdown
 import titleext, mathjax
 
 from jinja2 import Environment, FileSystemLoader
 from jinja2.exceptions import TemplateSyntaxError
 
-
 PAGE_ENCODING = 'UTF-8'
 DEFAULT_TEMPLATE = 'default.j2.html'
 TEMPLATE_DIR = '_templates'
 IGNORE_LIST = ['.', '_', '*~']
-
 
 class File(object):
     def __init__(self, basedir, path):
@@ -59,15 +56,6 @@ class File(object):
         except OSError as e:
             if e.errno == errno.EEXIST:
                 pass
-
-def load_yaml_mapping(filename):
-    try:
-        with open(filename, 'rb') as fd:
-            mapping = yaml.load(fd)
-            return mapping if mapping else {}
-    except IOError as e:
-        if e.errno == errno.ENOENT:
-            return {}
 
 def load_metadata_contents(filename, get_contents=True):
     """
@@ -156,22 +144,6 @@ def all_files(basedir, ignore_list=None):
 
             yield abspath, relpath
 
-try:
-    from urllib.request import pathname2url, url2pathname
-except ImportError:
-    from urllib import pathname2url, url2pathname
-
-def path2url(path):
-    m = re.match(r'(.*)[/\\]index.html?$', path)
-    if m:
-        path = m.group(1) + os.path.sep
-    return pathname2url(os.path.sep + path)
-
-def url2path(url):
-    if url.endswith('/'):
-        url += 'index.html'
-    return url2pathname(url).lstrip(os.path.sep)
-
 
 class TemplateEngine(object):
     def __init__(self, templatedir):
@@ -243,7 +215,7 @@ class PageBase(object):
     def __init__(self, srcfile, dstpath=None):
         self.srcfile = srcfile
         self.dstpath = dstpath or srcfile.path
-        self.url = path2url(self.dstpath)
+        self.url = os.path.sep + self.dstpath
 
     def dependencies(self):
         """
