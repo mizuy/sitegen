@@ -12,9 +12,7 @@
         + _site             : ooutput html files
 
 command:
-    cd root
     sitegen src -o _site
-
 
 ## Environment setup and install
 
@@ -29,16 +27,15 @@ Mac OS X Lion, Brew's python.
     1.8.2
     % which virtualenv
     /usr/local/share/python/virtualenv
-    % virtualenv env
+
+Virtualenv, setup.py
+
+    % make virtualenv
     New python executable in env/bin/python
     Installing setuptools............done.
     Installing pip...............done.
     % source env/bin/activate
-    (env)% python setup.py install
+    (env)% make install
     ...
     Finished processing dependencies for sitegen==1.0.0
     (env)% sitegen example -o _site
-
-for fixed Markdown,
-    
-    % pip install git+git://github.com/mizuy/Python-Markdown.git@fix_deflist#egg=Markdown
