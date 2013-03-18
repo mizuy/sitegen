@@ -1,11 +1,31 @@
+/_site
+
+# Buildout's directories
+/bin
+/develop-eggs
+/eggs
+/parts
+/.installed.cfg
+/downloads
+/lib
+/src
+.mr.developer.cfg
+
+# Setuptools/Distribute's files
+*.egg-info
+/dist
+/build
+
+# Python's precompiled files
 *.pyc
 *.pyo
+
+# Sphinx's builds
+/docs/_build
+
+# backup files
 *~
 #*
-build
-dist
-*.egg-info
-env
-_site
-markdown
 
+# virtualenv
+/env

@@ -26,10 +26,11 @@ setup(name='sitegen',
       url='http://github.com/mizuy/sitegen',
       license='MIT',
       packages=find_packages(),
-      dependency_links=['https://github.com/waylan/Python-Markdown/archive/fdfc84405ba690705ff343d46ab658bfc50a8836.zip#egg=Markdown-2.3dev'],
-      install_requires=['Jinja2',  'PyYAML', 'Pygments', 'Markdown>=2.3dev'],
+      install_requires=['Jinja2',  'PyYAML', 'Pygments'],
       entry_points=\
 """
 [console_scripts]
 sitegen = sitegen:main
 """)
+
+#dependency_links=['https://github.com/mizuy/Python-Markdown/tarball/master#egg=Markdown-dev'],
