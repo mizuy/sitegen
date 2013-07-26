@@ -13,10 +13,7 @@ from contextlib import contextmanager
 import errno
 from glob import glob
 import yaml
-
-import markdown
-import titleext, mathjax
-
+import subprocess
 from jinja2 import Environment, FileSystemLoader
 from jinja2.exceptions import TemplateSyntaxError
 
@@ -57,41 +54,44 @@ class File(object):
             if e.errno == errno.EEXIST:
                 pass
 
-def load_metadata_contents(filename, get_contents=True):
+def load_metadata(source):
     """
     split file contents into metadata and remaining contents
 
     metadata is yaml formatted data at head tagged by two '---' lines
-
-    if get_contents is True, return values contain additional 'contents' and 'line_offset', 
-    which is intended to used for propor error message
 
         ---
         yaml formatted metadata
         ---
         contents
     """
-    with open(filename, 'rb') as fd:
-        start = fd.readline()
-        if start.strip() == b'---':
-            lines = []
-            while True:
-                line = fd.readline()
-                if re.match(b'^---\r?\n', line):
-                    break
-                lines.append(line)
-            front = b''.join(lines)
-            line_offset = len(lines) + 1
-            metadata = yaml.load(front) or {}
-        else:
-            line_offset = 0
-            fd.seek(0)
-            metadata = {}
+    SPLIT = r'^---+\s*'
+    metadata = {}
+    line_offset = 0
+    content = source
 
-        if get_contents:
-            return metadata, line_offset, fd.read()
+    i = 0
+    lines = source.splitlines()
+
+    while i < len(lines):
+        if not lines[i].strip():
+            i += 1
+            continue
+        if re.match(SPLIT, lines[i]):
+            i += 1
+            yaml_start = i
+            while i < len(lines):
+                if re.match(SPLIT, lines[i]):
+                    yaml_end = i
+                    i += 1
+                    break
+                i += 1
+            metadata = yaml.load('\n'.join(lines[yaml_start:yaml_end])) or metadata
+            line_offset = yaml_end+1
+            content = '\n'.join(lines[line_offset:])
         else:
-            return metadata
+            break
+    return metadata, line_offset, content
 
 def changeext(path, ext):
     base, suffix = os.path.splitext(path)
@@ -164,25 +164,40 @@ class TemplateEngine(object):
 
 template_engine = TemplateEngine(TEMPLATE_DIR)
 
-class MarkdownEngine(object):
+class Pandoc(object):
+    # based on https://github.com/bebraw/pypandoc/blob/master/pypandoc/pypandoc.py
     def __init__(self):
-        t = titleext.makeExtension()
-        m = mathjax.makeExtension()
-        self.extensions = ['extra', t, 'codehilite', 'nl2br', 'toc', m]
-        self.extension_configs = {}
+        self.src_fmts, self.dst_fmts = self.get_formats()
+        self.templates = os.path.abspath(os.path.join(os.path.dirname(__file__),'..'))
 
-        #{'wikilinks' : [
-        #                                ('base_url', '/articles/'),
-        #                                ('end_url', '.html')]
-        #                                }
-        #{'toc': [('title', 'Table of Contents'), ('anchorlink', True)]}
-        self.md = markdown.Markdown(extensions=self.extensions, extension_configs=self.extension_configs)
+    def convert(self, src, src_format, dst_format, extra_args=[]):
+        if src_format not in self.src_fmts:
+            raise RuntimeError('Invalid src format! Expected one of these: ' + ', '.join(self.src_fmts))
+        if dst_format not in self.dst_fmts:
+            raise RuntimeError('Invalid dst format! Expected one of these: ' + ', '.join(self.dst_fmts))
 
-    def convert(self, text):
-        return self.md.convert(text), self.md.title
+        args = ['pandoc', '--from='+src_format, '--to='+dst_format]
+        args.extend(extra_args)
+        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        return p.communicate(src)[0]
 
-markdown_engine = MarkdownEngine()
+    def get_formats(self):
+        '''
+        Dynamic preprocessor for Pandoc formats.
+        Return 2 lists. "from_formats" and "to_formats".
+        ''' 
+        p = subprocess.Popen(['pandoc', '-h'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        help_text = p.communicate()[0].splitlines(False)
+        txt = ' '.join(help_text[1:help_text.index('Options:')])
 
+        aux = txt.split('Output formats: ')
+        in_ = aux[0].split('Input formats: ')[1].split(',')
+        out = aux[1].split(',')
+
+        return [f.strip() for f in in_], [f.strip() for f in out]
+
+pandoc = Pandoc()
+        
 class Site(object):
     def __init__(self, basedir):
         self.basedir = basedir
@@ -273,14 +288,38 @@ class PageMarkdown(PageTemplated):
         super(PageMarkdown, self).__init__(srcfile)
 
     def render(self):
-        context, offset, contents = load_metadata_contents(self.srcfile.filename, True)
-        contents = contents.decode(PAGE_ENCODING)
-        context['source'] = contents
-        contents,title = markdown_engine.convert(contents)
-        if not context.has_key('title'):
-            context['title'] = title
-        return self.render_template(contents, context)
+        with open(self.srcfile.filename, 'r') as f:
+            # TODO(future): next version of pandoc has their own yaml metadata extention.
 
+            source = f.read()
+            metadata, offset, content = load_metadata(source)
+
+            extra_args=['--mathjax',
+                        '--data-dir='+pandoc.templates,
+                        '--template=_templates/vars',
+                        '--toc']
+            if 'bibliography' in metadata:
+                bib = os.path.abspath(os.path.join(self.srcfile.dirname, metadata['bibliography']))
+                extra_args.append('--bibliography='+bib)
+            if 'csl' in metadata:
+                csl = metadata['csl']
+                extra_args.append('--csl='+csl)
+
+            s = pandoc.convert(content, 'markdown', 'html5', extra_args)
+
+            title, toc, body = s.decode(PAGE_ENCODING).split('<><><><>')
+            
+            title = title.strip()
+            toc = toc.strip()
+            body = body.replace('[TOC]', toc)
+
+            if title:
+                metadata['title'] = title
+            metadata['toc'] = toc
+            metadata['offset'] = offset
+            metadata['source'] = source.decode(PAGE_ENCODING)
+
+            return self.render_template(body, metadata)
 
 class SiteGenerator(object):
     def __init__(self, srcdir, dstdir):

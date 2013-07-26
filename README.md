@@ -35,7 +35,19 @@ Virtualenv, setup.py
     Installing setuptools............done.
     Installing pip...............done.
     % source env/bin/activate
-    (env)% make install
-    ...
-    Finished processing dependencies for sitegen==1.0.0
-    (env)% sitegen example -o _site
+    (env)% python setup.py develop
+    (env)% deactivate
+    % make
+
+## Pandoc
+
+1. Install Haskell-platform
+2. set $PATH to $CABALDIR
+3. Install pandoc
+
+    cabal install pandoc
+
+4. test run
+
+    pandoc -v
+    

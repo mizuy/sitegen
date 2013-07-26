@@ -1,8 +1,7 @@
 ---
     template: markdown_src.j2.html
 ---
-
-# MathJax samples
+% MathJax samples
 
 http://www.mathjax.org/demos/tex-samples/
 
