@@ -1,20 +1,11 @@
 ---
    template: markdown_src.j2.html
+   bibliography: my.bib
+   csl: nature.csl
 ---
+% Markdown
 
-# deflist
-
-
-hoge
- : hogehoge
-
-- hoge
--    :    hogehoge
-
-
-
-# Markdown
-
+## Table of Contents
 [TOC]
 
 
@@ -234,6 +225,13 @@ $$
 
 [more example](mathjax.html)
 
+## bibliography
+
+metadataのbibliographyに相対パスでbibtex fileを指定する。
+
+CSLを指定したい場合は、$HOME/.csl 以下において、metadataのcslで指定する。Referenceは自動的にページの最後に列挙される。
+
+Oxidative Bisulfite Sequencing[@Booth:2012fh].
 
 ## footnote
 
@@ -255,3 +253,7 @@ Here is a footnote reference,[^1] and another.[^longnote]
 
 This paragraph won't be part of the note, because it
 isn't indented.
+
+## References
+
+ここに自動的にbibliographyが列挙される。

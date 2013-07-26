@@ -1,7 +1,7 @@
 import os
 from setuptools import setup, find_packages
 
-version = '1.0.1'
+version = '2.0.0'
 
 README = os.path.join(os.path.dirname(__file__), 'README.md')
 long_description = open(README).read() + '\n\n'
@@ -26,7 +26,7 @@ setup(name='sitegen',
       url='http://github.com/mizuy/sitegen',
       license='MIT',
       packages=find_packages(),
-      install_requires=['Jinja2',  'PyYAML', 'Pygments'],
+      install_requires=['Jinja2',  'PyYAML'],
       entry_points=\
 """
 [console_scripts]
