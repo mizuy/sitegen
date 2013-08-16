@@ -119,14 +119,21 @@ def log(message):
     sys.stderr.flush()
 
 @contextmanager
-def report_exceptions(message):
+def report_exceptions():
+    import traceback
+    import pdb
+    import sys
     try:
         yield
-    except Exception as e:
-        global retcode
-        retcode = 1
-        log('Error when {0}: {1}'.format(message, e))
-
+    except Exception:
+        e, m, tb = sys.exc_info()
+        print('exception traceback:'.ljust( 80, '=' ))
+        for tbi in traceback.format_tb( tb ):
+            print(tbi)
+        print('  %s' % str( m ))
+        print(''.rjust( 80, '=' ))
+        pdb.post_mortem(tb)
+        
 def is_ignored(filename, ignore_list):
     for ignore in ignore_list:
         if any( fnmatch.fnmatch(part, ignore) for part in filename.split(os.path.sep)):
@@ -178,8 +185,9 @@ class Pandoc(object):
 
         args = ['pandoc', '--from='+src_format, '--to='+dst_format]
         args.extend(extra_args)
-        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        return p.communicate(src)[0]
+        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        data,error = p.communicate(src)
+        return data, error
 
     def get_formats(self):
         '''
@@ -210,7 +218,7 @@ class Site(object):
         for abspath, relpath in all_files(basedir, IGNORE_LIST):
             srcfile = File(basedir, relpath)
 
-            with report_exceptions('loading {0}'.format(relpath)):
+            with report_exceptions():
                 if srcfile.suffix in ['.md', '.markdown']:
                     page = PageMarkdown(srcfile)
                 else:
@@ -288,38 +296,43 @@ class PageMarkdown(PageTemplated):
         super(PageMarkdown, self).__init__(srcfile)
 
     def render(self):
-        with open(self.srcfile.filename, 'r') as f:
-            # TODO(future): next version of pandoc has their own yaml metadata extention.
+        with report_exceptions():
+            with open(self.srcfile.filename, 'r') as f:
+                # TODO(future): next version of pandoc has their own yaml metadata extention.
 
-            source = f.read()
-            metadata, offset, content = load_metadata(source)
+                source = f.read()
+                metadata, offset, content = load_metadata(source)
 
-            extra_args=['--mathjax',
-                        '--data-dir='+pandoc.templates,
-                        '--template=_templates/vars',
-                        '--toc']
-            if 'bibliography' in metadata:
-                bib = os.path.abspath(os.path.join(self.srcfile.dirname, metadata['bibliography']))
-                extra_args.append('--bibliography='+bib)
-            if 'csl' in metadata:
-                csl = metadata['csl']
-                extra_args.append('--csl='+csl)
+                extra_args=['--mathjax',
+                            '--data-dir='+pandoc.templates,
+                            '--template=_templates/vars',
+                            '--toc']
+                if 'bibliography' in metadata:
+                    bib = os.path.abspath(os.path.join(self.srcfile.dirname, metadata['bibliography']))
+                    extra_args.append('--bibliography='+bib)
+                if 'csl' in metadata:
+                    csl = metadata['csl']
+                    extra_args.append('--csl='+csl)
 
-            s = pandoc.convert(content, 'markdown', 'html5', extra_args)
+                s,error = pandoc.convert(content, 'markdown', 'html5', extra_args)
+                if not s.strip():
+                    title = 'ERROR'
+                    toc = ''
+                    body = '<pre>{}</pre>'.format(error)
+                else:
+                    title, toc, body = s.decode(PAGE_ENCODING).split('<><><><>')
 
-            title, toc, body = s.decode(PAGE_ENCODING).split('<><><><>')
-            
-            title = title.strip()
-            toc = toc.strip()
-            body = body.replace('[TOC]', toc)
+                    title = title.strip()
+                    toc = toc.strip()
+                    body = body.replace('[TOC]', toc)
 
-            if title:
-                metadata['title'] = title
-            metadata['toc'] = toc
-            metadata['offset'] = offset
-            metadata['source'] = source.decode(PAGE_ENCODING)
+                if title:
+                    metadata['title'] = title
+                metadata['toc'] = toc
+                metadata['offset'] = offset
+                metadata['source'] = source.decode(PAGE_ENCODING)
 
-            return self.render_template(body, metadata)
+                return self.render_template(body, metadata)
 
 class SiteGenerator(object):
     def __init__(self, srcdir, dstdir):
