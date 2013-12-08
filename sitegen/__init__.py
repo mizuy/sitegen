@@ -20,7 +20,7 @@ from jinja2.exceptions import TemplateSyntaxError
 PAGE_ENCODING = 'UTF-8'
 DEFAULT_TEMPLATE = 'default.j2.html'
 TEMPLATE_DIR = '_templates'
-IGNORE_LIST = ['.', '_', '*~']
+IGNORE_LIST = ['.', '.*','_', '*~', '#*#']
 
 class File(object):
     def __init__(self, basedir, path):
@@ -372,11 +372,11 @@ class SiteGenerator(object):
 def print_exception_traceback():
     info = sys.exc_info()
     tbinfo = traceback.format_tb( info[2] )             
-    print 'exception traceback:'.ljust( 80, '=' )
+    print('exception traceback:'.ljust( 80, '=' ))
     for tbi in tbinfo:
-        print tbi
-    print '  %s' % str( info[1] )
-    print ''.rjust( 80, '=' )
+        print(tbi)
+    print('  %s' % str( info[1] ))
+    print(''.rjust( 80, '=' ))
 
 
 def main():
