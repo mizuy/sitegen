@@ -6,6 +6,7 @@
 # install requirements: Jinja2, PyYAML, pandoc(from cabal)
 
 import sys
+import io
 import traceback
 import os
 import re
@@ -18,6 +19,9 @@ import subprocess
 from jinja2 import Environment, FileSystemLoader
 from jinja2.exceptions import TemplateSyntaxError
 
+from html.parser import HTMLParser
+
+DEBUG = False
 PAGE_ENCODING = 'UTF-8'
 DEFAULT_TEMPLATE = 'default.j2.html'
 TEMPLATE_DIR = '_templates'
@@ -121,7 +125,6 @@ def log(message):
 
 @contextmanager
 def report_exceptions():
-    import pdb
     import sys
     try:
         yield
@@ -132,7 +135,9 @@ def report_exceptions():
             print(tbi)
         print('  %s' % str(m))
         print(''.rjust(80, '='))
-        pdb.post_mortem(tb)
+        if DEBUG:
+            import pdb
+            pdb.post_mortem(tb)
 
 def is_ignored(filename, ignore_list):
     for ignore in ignore_list:
@@ -152,16 +157,96 @@ def all_files(basedir, ignore_list=None):
             yield abspath, relpath
 
 
+class HeadElement:
+    def __init__(self, level=0, aname=None, data=""):
+        self.level = level
+        self.aname = aname
+        self.data = data
+        self.children = []
+
+    def add_data(self, data):
+        self.data += data
+
+    def add_child(self, aname=None, data=""):
+        e = HeadElement(self.level+1, aname, data)
+        self.children.append(e)
+        return e
+
+    def get_child_last(self, level):
+        if level==self.level:
+            return self
+        else:
+            assert(level > self.level)
+            if not self.children:
+                self.add_child(None, "_SKIPPED_HEADER_")
+            return self.children[-1].get_child_last(level)
+
+    def write(self, out):
+        out.write('<li>')
+        if self.aname:
+            out.write('<a href="#{}">{}</a>'.format(self.aname, self.data))
+        else:
+            out.write('{}'.format(self.data))
+        out.write('</li>\n')
+        if self.children:
+            out.write('<ul class="nav">\n')
+            self.write_children(out)
+            out.write('</ul>\n')
+
+    def write_children(self, out):
+        for c in self.children:
+            c.write(out)
+
+class TocParser(HTMLParser):
+    def __init__(self, input):
+        HTMLParser.__init__(self)
+        self._current = None
+        self.heads = HeadElement()
+        self.feed(input)
+
+    def handle_starttag(self, tag, attrs):
+        m = re.match('h(\d)',tag)
+        if not m:
+            return
+
+        level = int(m.group(1))
+        assert(0 < level)
+
+        attrs = { k:v for (k,v) in attrs }
+
+        aname = attrs.get('id')
+
+        # parent
+        parent = self.heads.get_child_last(level-1)
+        e = parent.add_child(aname)
+
+        self._current = e
+
+    def handle_endtag(self, tag):
+        m = re.match('h(\d)',tag)
+        if not m:
+            return
+        self._current = None
+
+    def handle_data(self, data):
+        if self._current:
+            self._current.add_data(data)
+
+    def get_toc(self):
+        out = io.StringIO()
+        self.heads.write_children(out)
+        return out.getvalue()
+
 class TemplateEngine(object):
     def __init__(self, templatedir):
         self.templatedir = templatedir
         self.env = Environment(loader=FileSystemLoader(templatedir))
 
-    def render(self, template, context):
+    def render(self, template, metadata):
         try:
             t = self.env.get_template(template)
             # env.from_string()
-            return t.render(**context)
+            return t.render(**metadata)
         except TemplateSyntaxError as e:
             raise Exception("{0}:{1}: {2}, {3}".format(e.filename, e.lineno, e.name, e.message))
 
@@ -195,7 +280,8 @@ class Pandoc(object):
         Return 2 lists. "from_formats" and "to_formats".
         '''
         p = subprocess.Popen(['pandoc', '-h'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        help_text = p.communicate()[0].splitlines(False)
+        t = p.communicate()[0]
+        help_text = t.decode('ascii').splitlines(False)
         txt = ' '.join(help_text[1:help_text.index('Options:')])
 
         aux = txt.split('Output formats: ')
@@ -288,21 +374,21 @@ class PageTemplated(PageBase):
         if self.basename == 'index.html':
             self.parts.pop()
 
-    def render_template(self, contents, context={}):
-        context['contents'] = contents
-        context['url'] = self.url
-        context['root'] = self.root
-        context['path'] = self.dstpath
-        context['parts'] = self.parts
-        context['mtime'] = self.srcfile.mtime()
+    def render_template(self, contents, metadata={}):
+        metadata['contents'] = contents
+        metadata['url'] = self.url
+        metadata['root'] = self.root
+        metadata['path'] = self.dstpath
+        metadata['parts'] = self.parts
+        metadata['mtime'] = self.srcfile.mtime()
 
-        template = context.get('template') or DEFAULT_TEMPLATE
-        return template_engine.render(template, context)
+        template = metadata.get('template') or DEFAULT_TEMPLATE
+        return template_engine.render(template, metadata)
 
     def render(self):
         contents = self.srcfile.open().read().decode(PAGE_ENCODING)
-        context = {}
-        return self.render_template(contents, context)
+        metadata = {}
+        return self.render_template(contents, metadata)
 
     def write(self, filename):
         with open(filename, 'wb') as f:
@@ -331,7 +417,7 @@ class PageMarkdown(PageTemplated):
                     csl = metadata['csl']
                     extra_args.append('--csl='+csl)
 
-                s,error = pandoc.convert(content, 'markdown', 'html5', extra_args)
+                s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args)
                 if not s.strip():
                     title = 'ERROR'
                     toc = ''
@@ -339,15 +425,16 @@ class PageMarkdown(PageTemplated):
                 else:
                     title, toc, body = s.decode(PAGE_ENCODING).split('<><><><>')
 
+                    toc = TocParser(body).get_toc().strip()
+
                     title = title.strip()
-                    toc = toc.strip()
                     body = body.replace('[TOC]', toc)
 
                 if title:
                     metadata['title'] = title
                 metadata['toc'] = toc
                 metadata['offset'] = offset
-                metadata['source'] = source.decode(PAGE_ENCODING)
+                metadata['source'] = source
 
                 return self.render_template(body, metadata)
 
