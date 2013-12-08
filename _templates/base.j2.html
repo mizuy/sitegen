@@ -23,7 +23,13 @@
     <body>
         <div id="main">
             <div id="header">
-              {% block header %}<a href="{{root}}/index.html">{{sitename or 'Index'}}</a> >>{% endblock header %}
+              <a href="{{root}}/index.html">{{sitename or 'Index'}}</a> >>
+              {% block header %}
+              {{parts}}
+              {% for link, name in parts %}
+                   / <a href="{{link}}">{{name}}</a>
+              {% endfor %}
+              {% endblock header %}
             </div>
             <div id="content">
                 {% block contents %}{{ contents }}{% endblock contents %}

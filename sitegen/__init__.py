@@ -3,15 +3,16 @@
 # Static Site Generator powered by markdown and jinja2
 # Copyright (c) 2012 MIZUGUCHI Yasuhiko
 # based on http://obraz.pirx.ru/
+# install requirements: Jinja2, PyYAML, pandoc(from cabal)
 
-import sys, traceback
+import sys
+import traceback
 import os
 import re
 import shutil
 import fnmatch
 from contextlib import contextmanager
 import errno
-from glob import glob
 import yaml
 import subprocess
 from jinja2 import Environment, FileSystemLoader
@@ -29,7 +30,7 @@ class File(object):
         self.filename = os.path.join(basedir, path)
         self.basename = os.path.basename(self.filename)
         self.dirname = os.path.dirname(self.filename)
-        _ , self.suffix = os.path.splitext(self.basename)
+        _, self.suffix = os.path.splitext(self.basename)
 
     def exists(self):
         return os.path.exists(self.filename)
@@ -120,23 +121,22 @@ def log(message):
 
 @contextmanager
 def report_exceptions():
-    import traceback
     import pdb
     import sys
     try:
         yield
     except Exception:
         e, m, tb = sys.exc_info()
-        print('exception traceback:'.ljust( 80, '=' ))
-        for tbi in traceback.format_tb( tb ):
+        print('exception traceback:'.ljust(80, '='))
+        for tbi in traceback.format_tb(tb):
             print(tbi)
-        print('  %s' % str( m ))
-        print(''.rjust( 80, '=' ))
+        print('  %s' % str(m))
+        print(''.rjust(80, '='))
         pdb.post_mortem(tb)
-        
+
 def is_ignored(filename, ignore_list):
     for ignore in ignore_list:
-        if any( fnmatch.fnmatch(part, ignore) for part in filename.split(os.path.sep)):
+        if any(fnmatch.fnmatch(part, ignore) for part in filename.split(os.path.sep)):
             return False
     return True
 
@@ -193,7 +193,7 @@ class Pandoc(object):
         '''
         Dynamic preprocessor for Pandoc formats.
         Return 2 lists. "from_formats" and "to_formats".
-        ''' 
+        '''
         p = subprocess.Popen(['pandoc', '-h'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         help_text = p.communicate()[0].splitlines(False)
         txt = ' '.join(help_text[1:help_text.index('Options:')])
@@ -205,7 +205,7 @@ class Pandoc(object):
         return [f.strip() for f in in_], [f.strip() for f in out]
 
 pandoc = Pandoc()
-        
+
 class Site(object):
     def __init__(self, basedir):
         self.basedir = basedir
@@ -239,6 +239,7 @@ class PageBase(object):
         self.srcfile = srcfile
         self.dstpath = dstpath or srcfile.path
         self.url = os.path.sep + self.dstpath
+        self.basename = os.path.basename(self.url)
 
     def dependencies(self):
         """
@@ -272,11 +273,27 @@ class PageTemplated(PageBase):
         self.depth = len(self.url.strip('/').split('/')) - 1
         self.root = '/'.join(['..'] * (self.depth)) if self.depth>0 else '.'
 
+        def link(depth):
+            if depth==0:
+                return './' + self.basename
+            elif depth==1:
+                return './index.html'
+            else:
+                return '/'.join(['..'] * (depth-1)) + '/index.html'
+
+        p, _ = os.path.splitext(self.url)
+        p = ['Index'] + p.strip('/').split('/')
+
+        self.parts = [(link(i), pp) for i,pp in enumerate(p[::-1])][::-1]
+        if self.basename == 'index.html':
+            self.parts.pop()
+
     def render_template(self, contents, context={}):
         context['contents'] = contents
         context['url'] = self.url
         context['root'] = self.root
         context['path'] = self.dstpath
+        context['parts'] = self.parts
         context['mtime'] = self.srcfile.mtime()
 
         template = context.get('template') or DEFAULT_TEMPLATE
@@ -371,21 +388,20 @@ class SiteGenerator(object):
 
 def print_exception_traceback():
     info = sys.exc_info()
-    tbinfo = traceback.format_tb( info[2] )             
-    print('exception traceback:'.ljust( 80, '=' ))
+    tbinfo = traceback.format_tb(info[2])
+    print('exception traceback:'.ljust(80, '='))
     for tbi in tbinfo:
         print(tbi)
-    print('  %s' % str( info[1] ))
-    print(''.rjust( 80, '=' ))
+    print('  %s' % str(info[1]))
+    print(''.rjust(80, '='))
 
 
 def main():
-    import sys
     from argparse import ArgumentParser
     parser = ArgumentParser(prog='makesite', description='generating html static site from markdown documents')
     parser.add_argument("inputdir", help="input directory")
     parser.add_argument("-o", "--output", dest="outputdir", help="output directory")
-    
+
     args = parser.parse_args()
 
     inputdir = args.inputdir
