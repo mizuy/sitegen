@@ -183,15 +183,20 @@ class HeadElement:
 
     def write(self, out):
         out.write('<li>')
+
+        text = self.data
+        if len(self.data) > 10 and ';' in self.data:
+            text = self.data.split(';')[0]
+
         if self.aname:
-            out.write('<a href="#{}">{}</a>'.format(self.aname, self.data))
+            out.write('<a href="#{}">{}</a>'.format(self.aname, text))
         else:
-            out.write('{}'.format(self.data))
-        out.write('</li>\n')
+            out.write('{}'.format(text))
         if self.children:
             out.write('<ul class="nav">\n')
             self.write_children(out)
             out.write('</ul>\n')
+        out.write('</li>\n')
 
     def write_children(self, out):
         for c in self.children:
@@ -424,11 +429,13 @@ class PageMarkdown(PageTemplated):
                     body = '<pre>{}</pre>'.format(error)
                 else:
                     title, toc, body = s.decode(PAGE_ENCODING).split('<><><><>')
+                    title = title.strip()
+
+                    body = body.replace('<table>','<table class="table table-hover table-condensed table-bordered">') # TODO: dirty ad-hoc
+                    body = body.replace('[TOC]', toc)
 
                     toc = TocParser(body).get_toc().strip()
 
-                    title = title.strip()
-                    body = body.replace('[TOC]', toc)
 
                 if title:
                     metadata['title'] = title

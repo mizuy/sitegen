@@ -43,11 +43,15 @@ Virtualenv, setup.py
 
 1. Install Haskell-platform
 2. set $PATH to $CABALDIR
-3. Install pandoc
+3. Install pandoc, pandoc-citeproc
 
     cabal install pandoc
+    cabal install pandoc-citeproc
 
 4. test run
 
     pandoc -v
     
+## CSL
+
+Please put your .csl file into ~/.csl/
