@@ -1,4 +1,5 @@
 /_site
+/_output
 
 # Buildout's directories
 /bin

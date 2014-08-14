@@ -1,8 +1,5 @@
 all:
-	env/bin/sitegen example -o _site
+	env/bin/sitegen example -o _output
 
 clean:
-	rm -rf _site
-
-virtualenv:
-	virtualenv-2.7 env --no-site-packages
+	rm -rf _output

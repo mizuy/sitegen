@@ -1,7 +1,6 @@
 % My Note
 
-テーブルオブコンテンツ
-
+Table of Contents:
 [TOC]
 
 ## hoge
@@ -11,3 +10,5 @@
 
 
 ## hogehoge
+
+- [subdir](subdir/index.html)

@@ -18,24 +18,18 @@ command:
 
 Mac OS X Lion, Brew's python.
 
-    % python --version
-    Python 2.7.3
-    % which python
-    /usr/local/bin/python
-    % sudo easy_install virtualenv
-    % virtualenv --version
-    1.8.2
-    % which virtualenv
-    /usr/local/share/python/virtualenv
-
-Virtualenv, setup.py
-
-    % make virtualenv
-    New python executable in env/bin/python
-    Installing setuptools............done.
-    Installing pip...............done.
+    % python3 --version
+    Python 3.4.1
+    % which python3
+    /usr/local/bin/python3
+    % python3 -m ensurepip
+    Ignoring indexes: https://pypi.python.org/simple/
+    Requirement already satisfied (use --upgrade to upgrade): setuptools in /usr/local/lib/python3.4/site-packages
+    Requirement already satisfied (use --upgrade to upgrade): pip in /usr/local/lib/python3.4/site-packages
+    Cleaning up...
+    % pyvenv-3.4 env
     % source env/bin/activate
-    (env)% python setup.py develop
+    (env)% python setup.py install
     (env)% deactivate
     % make
 
