@@ -16,21 +16,22 @@ command:
 
 ## Environment setup and install
 
-Mac OS X Lion, Brew's python.
+Mac OS X Yosemite, Brew's python
 
     % python3 --version
-    Python 3.4.1
+    Python 3.5.1
     % which python3
     /usr/local/bin/python3
-    % python3 -m ensurepip
-    Ignoring indexes: https://pypi.python.org/simple/
-    Requirement already satisfied (use --upgrade to upgrade): setuptools in /usr/local/lib/python3.4/site-packages
-    Requirement already satisfied (use --upgrade to upgrade): pip in /usr/local/lib/python3.4/site-packages
-    Cleaning up...
-    % pyvenv-3.4 env
+    % python3 -m venv env
     % source env/bin/activate
-    (env)% python setup.py install
-    (env)% deactivate
+    (env) % which python3
+    /Users/mizuy/note/sitegen/env/bin/python3
+    (env) % which python
+    /Users/mizuy/note/sitegen/env/bin/python
+    (env) % python --version
+    Python 3.5.1
+    (env) % python setup.py develop
+    (env) % deactivate
     % make
 
 ## Pandoc
@@ -39,12 +40,13 @@ Mac OS X Lion, Brew's python.
 2. set $PATH to $CABALDIR
 3. Install pandoc, pandoc-citeproc
 
-    cabal install pandoc
-    cabal install pandoc-citeproc
+    % cabal install pandoc
+    % cabal install pandoc-citeproc
 
 4. test run
 
-    pandoc -v
+    % pandoc -v
+    pandoc 1.16.0.2
     
 ## CSL
 
