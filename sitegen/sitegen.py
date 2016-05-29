@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Static Site Generator powered by markdown and jinja2
-# Copyright (c) 2012 MIZUGUCHI Yasuhiko
+# Copyright (c) 2012-2016 MIZUGUCHI Yasuhiko
 # based on http://obraz.pirx.ru/
 # install requirements: Jinja2, PyYAML, pandoc(from cabal)
 
@@ -26,6 +26,15 @@ PAGE_ENCODING = 'UTF-8'
 DEFAULT_TEMPLATE = 'default.j2.html'
 IGNORE_LIST = ['.', '.*','_', '*~', '#*#']
 
+def makedirs(directory):
+    if os.path.exists(directory):
+        return
+    try:
+        os.makedirs(directory)
+    except OSError as e:
+        if e.errno == errno.EEXIST:
+            pass
+
 class File:
     def __init__(self, basedir, path):
         self.basedir = basedir
@@ -45,11 +54,7 @@ class File:
         return open(self.filename, 'rb')
 
     def makedirs(self):
-        try:
-            os.makedirs(self.dirname)
-        except OSError as e:
-            if e.errno == errno.EEXIST:
-                pass
+        makedirs(self.dirname)
 
     def remove(self):
         try:
@@ -57,6 +62,17 @@ class File:
         except OSError as e:
             if e.errno == errno.EEXIST:
                 pass
+
+    def change_ext(self, ext):
+        """
+          ex. ext = '.docx' or 'docx'
+        """
+        a, _ = os.path.splitext(self.path)
+        e = ext.lstrip('.')
+        return File(self.basedir,'{}.{}'.format(a,e))
+
+    def abspath(self):
+        return os.path.abspath(self.filename)
 
 def load_metadata(source):
     """
@@ -97,10 +113,6 @@ def load_metadata(source):
             break
     return metadata, line_offset, content
 
-def changeext(path, ext):
-    base, suffix = os.path.splitext(path)
-    return base+'.'+ext
-
 def remove(path):
     try:
         if os.path.isdir(path):
@@ -111,43 +123,31 @@ def remove(path):
         if e.errno == errno.EEXIST:
             pass
 
-def makedirs(directory):
-    try:
-        os.makedirs(directory)
-    except OSError as e:
-        if e.errno == errno.EEXIST:
-            pass
-
 def log(message):
     sys.stderr.write('{0}\n'.format(message))
     sys.stderr.flush()
 
+def print_exception_traceback():
+    import sys
+    e, m, tb = sys.exc_info()
+    print('exception traceback:'.ljust(80, '='))
+    for tbi in traceback.format_tb(tb):
+        print(tbi)
+    print('  %s' % str(m))
+    print(''.rjust(80, '='))
+    if DEBUG:
+        import pdb
+        pdb.post_mortem(tb)
+
 @contextmanager
 def report_exceptions():
-    import sys
     try:
         yield
+    except KeyboardInterrupt:
+        raise KeyboardInterrupt()
     except Exception:
-        e, m, tb = sys.exc_info()
-        print('exception traceback:'.ljust(80, '='))
-        for tbi in traceback.format_tb(tb):
-            print(tbi)
-        print('  %s' % str(m))
-        print(''.rjust(80, '='))
-        if DEBUG:
-            import pdb
-            pdb.post_mortem(tb)
+        print_exception_traceback()
 
-def print_exception_traceback():
-    info = sys.exc_info()
-    tbinfo = traceback.format_tb(info[2])
-    print('exception traceback:'.ljust(80, '='))
-    for tbi in tbinfo:
-        print(tbi)
-    print('  %s' % str(info[1]))
-    print(''.rjust(80, '='))
-
-            
 def is_ignored(filename, ignore_list):
     for ignore in ignore_list:
         if any(fnmatch.fnmatch(part, ignore) for part in filename.split(os.path.sep)):
@@ -284,13 +284,24 @@ class Pandoc:
     def __init__(self):
         self.src_fmts, self.dst_fmts = self.get_formats()
 
-    def convert(self, src, src_format, dst_format, extra_args=[]):
+    def check_format(self, src_format, dst_format):
         if src_format not in self.src_fmts:
             raise RuntimeError('Invalid src format! Expected one of these: ' + ', '.join(self.src_fmts))
         if dst_format not in self.dst_fmts:
             raise RuntimeError('Invalid dst format! Expected one of these: ' + ', '.join(self.dst_fmts))
 
+    def convert(self, src, src_format, dst_format, extra_args=[]):
+        self.check_format(src_format,dst_format)
+
         args = ['pandoc', '--from='+src_format, '--to='+dst_format]
+        args.extend(extra_args)
+        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        data,error = p.communicate(src)
+        return data, error
+
+    def convert_write(self, src, src_format, dst_filename, dst_format, extra_args=[]):
+        self.check_format(src_format,dst_format)
+        args = ['pandoc', '--from='+src_format, '--to='+dst_format, '-o',dst_filename]
         args.extend(extra_args)
         p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         data,error = p.communicate(src)
@@ -315,6 +326,9 @@ class Pandoc:
 pandoc = Pandoc()
 
 class Site:
+    """
+        Site generate a list of pages from basedir
+    """
     def __init__(self, basedir, template_engine):
         self.basedir = basedir
         self.template_engine = template_engine
@@ -344,6 +358,9 @@ class Site:
         return self.pages.get(path)
 
 class PageBase:
+    """
+        Page knows dstpath, but don't know destination directory.
+    """
     def __init__(self, srcfile, dstpath=None):
         self.srcfile = srcfile
         self.dstpath = dstpath or srcfile.path
@@ -356,29 +373,31 @@ class PageBase:
         """
         return []
 
-    def write(self, filename):
-        raise NotImplemented()
-
     def dstfile(self, dstbasedir):
         return File(dstbasedir, self.dstpath)
 
-    def generate(self, dstfile):
-        """
-        public wrapper function.
-        """
+    def generate(self, dstbasedir):
+        dstfile = self.dstfile(dstbasedir)
         dstfile.makedirs()
-        self.write(dstfile.filename)
+        self._write(dstfile)
+
+    def another_dstfiles(self, dstbasedir):
+        return []
+
+    def _write(self, dstfile):
+        raise NotImplemented()
+
 
 class PageFile(PageBase):
     def __init__(self, srcfile):
         super(PageFile, self).__init__(srcfile)
 
-    def write(self, filename):
-        shutil.copy(self.srcfile.filename, filename)
+    def _write(self, dstfile):
+        shutil.copy(self.srcfile.filename, dstfile.filename)
 
 class PageTemplated(PageBase):
     def __init__(self, srcfile, template_engine):
-        super(PageTemplated, self).__init__(srcfile, changeext(srcfile.path, 'html'))
+        super(PageTemplated, self).__init__(srcfile, srcfile.change_ext('html').path)
         self.depth = len(self.url.strip('/').split('/')) - 1
         self.root = '/'.join(['..'] * (self.depth)) if self.depth>0 else '.'
         self.template_engine = template_engine
@@ -409,60 +428,65 @@ class PageTemplated(PageBase):
         template = metadata.get('template') or DEFAULT_TEMPLATE
         return self.template_engine.render(template, metadata)
 
-    def render(self):
+    def _write(self, dstfile):
         contents = self.srcfile.open().read().decode(PAGE_ENCODING)
         metadata = {}
-        return self.render_template(contents, metadata)
-
-    def write(self, filename):
-        with open(filename, 'wb') as f:
-            f.write(self.render().encode(PAGE_ENCODING))
+        render = self.render_template(contents, metadata)
+        with open(dstfile.filename, 'wb') as f:
+            f.write(render.encode(PAGE_ENCODING))
 
 class PageMarkdown(PageTemplated):
     def __init__(self, srcfile, template_engine):
         super(PageMarkdown, self).__init__(srcfile, template_engine)
 
-    def render(self):
+    def _write(self, dstfile):
         with report_exceptions():
-            with open(self.srcfile.filename, 'r') as f:
-                # TODO(future): next version of pandoc has their own yaml metadata extention.
+            source =  open(self.srcfile.filename, 'r').read()
+            metadata, offset, content = load_metadata(source)
+            extra_args=['--mathjax',
+                        '--data-dir='+os.path.abspath(os.path.dirname(__file__)),
+                        '--template=vars',
+                        '--toc']
+            if 'bibliography' in metadata:
+                bib = os.path.abspath(os.path.join(self.srcfile.dirname, metadata['bibliography']))
+                extra_args.append('--bibliography='+bib)
+            if 'csl' in metadata:
+                csl = metadata['csl']
+                extra_args.append('--csl='+csl)
 
-                source = f.read()
-                metadata, offset, content = load_metadata(source)
+            s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args)
+            if not s.strip():
+                title = 'ERROR'
+                toc = ''
+                body = '<pre>{}</pre>'.format(error.decode(PAGE_ENCODING))
+            else:
+                title, toc, body = s.decode(PAGE_ENCODING).split('<><><><>')
+                title = title.strip()
 
-                extra_args=['--mathjax',
-                            '--data-dir='+os.path.abspath(os.path.dirname(__file__)),
-                            '--template=vars',
-                            '--toc']
-                if 'bibliography' in metadata:
-                    bib = os.path.abspath(os.path.join(self.srcfile.dirname, metadata['bibliography']))
-                    extra_args.append('--bibliography='+bib)
-                if 'csl' in metadata:
-                    csl = metadata['csl']
-                    extra_args.append('--csl='+csl)
+                body = body.replace('<table>','<table class="table table-hover table-condensed table-bordered">') # TODO: dirty ad-hoc
+                body = body.replace('[TOC]', toc)
 
-                s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args)
-                if not s.strip():
-                    title = 'ERROR'
-                    toc = ''
-                    body = '<pre>{}</pre>'.format(error.decode(PAGE_ENCODING))
-                else:
-                    title, toc, body = s.decode(PAGE_ENCODING).split('<><><><>')
-                    title = title.strip()
+                toc = TocParser(body).get_toc().strip()
+                if error:
+                    log(error)
 
-                    body = body.replace('<table>','<table class="table table-hover table-condensed table-bordered">') # TODO: dirty ad-hoc
-                    body = body.replace('[TOC]', toc)
+            if title:
+                metadata['title'] = title
+            metadata['toc'] = toc
+            metadata['offset'] = offset
+            metadata['source'] = source
 
-                    toc = TocParser(body).get_toc().strip()
+            with open(dstfile.filename, 'wb') as f:
+                f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
 
+            dd = dstfile.change_ext('docx')
+            s,error = pandoc.convert_write(content.encode(PAGE_ENCODING), 'markdown', dd.abspath(), 'docx')
+            if error:
+                log(error)
 
-                if title:
-                    metadata['title'] = title
-                metadata['toc'] = toc
-                metadata['offset'] = offset
-                metadata['source'] = source
-
-                return self.render_template(body, metadata)
+    def another_dstfiles(self, dstbasedir):
+        dstfile = self.dstfile(dstbasedir)
+        return [dstfile.change_ext('docx')]
 
 class SiteGenerator:
     def __init__(self, srcdir, dstdir, templatedir=None):
@@ -474,7 +498,12 @@ class SiteGenerator:
     def generate(self):
         makedirs(self.dstdir)
         current_dst = set(abspath for abspath, relpath in all_files(self.dstdir))
-        next_dst = set(page.dstfile(self.dstdir).filename for page in self.site)
+
+        next_dst = set()
+        for page in self.site:
+            next_dst.add(page.dstfile(self.dstdir).filename)
+            for i in page.another_dstfiles(self.dstdir):
+                next_dst.add(i.filename)
 
         deleted_dst = current_dst - next_dst
         log('delete {0} abandoned files from destination directory'.format(len(deleted_dst)))
@@ -494,7 +523,10 @@ class SiteGenerator:
 
             try:
                 log('generating {0}...'.format(page.url))
-                page.generate(dst)
+                page.generate(self.dstdir)
+            except KeyboardInterrupt:
+                print('Keyboard interrupted.')
+                return
             except:
                 dst.remove()
                 log('error while generating {0}'.format(page.url))
