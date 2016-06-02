@@ -480,7 +480,7 @@ class PageMarkdown(PageTemplated):
                 f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
 
             dd = dstfile.change_ext('docx')
-            s,error = pandoc.convert_write(content.encode(PAGE_ENCODING), 'markdown', dd.abspath(), 'docx')
+            s,error = pandoc.convert_write(content.encode(PAGE_ENCODING), 'markdown', dd.abspath(), 'docx', extra_args=['--reference-docx=reference.docx'])
             if error:
                 log(error)
 
