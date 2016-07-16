@@ -290,20 +290,20 @@ class Pandoc:
         if dst_format not in self.dst_fmts:
             raise RuntimeError('Invalid dst format! Expected one of these: ' + ', '.join(self.dst_fmts))
 
-    def convert(self, src, src_format, dst_format, extra_args=[]):
+    def convert(self, src, src_format, dst_format, extra_args=[], cwd=None):
         self.check_format(src_format,dst_format)
 
         args = ['pandoc', '--from='+src_format, '--to='+dst_format]
         args.extend(extra_args)
-        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
         data,error = p.communicate(src)
         return data, error
 
-    def convert_write(self, src, src_format, dst_filename, dst_format, extra_args=[]):
+    def convert_write(self, src, src_format, dst_filename, dst_format, extra_args=[], cwd=None):
         self.check_format(src_format,dst_format)
         args = ['pandoc', '--from='+src_format, '--to='+dst_format, '-o',dst_filename]
         args.extend(extra_args)
-        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
         data,error = p.communicate(src)
         return data, error
 
@@ -454,7 +454,7 @@ class PageMarkdown(PageTemplated):
                 csl = metadata['csl']
                 extra_args.append('--csl='+csl)
 
-            s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args)
+            s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.dirname)
             if not s.strip():
                 title = 'ERROR'
                 toc = ''
@@ -480,7 +480,9 @@ class PageMarkdown(PageTemplated):
                 f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
 
             dd = dstfile.change_ext('docx')
-            s,error = pandoc.convert_write(content.encode(PAGE_ENCODING), 'markdown', dd.abspath(), 'docx', extra_args=['--reference-docx=reference.docx'])
+            ref = os.path.abspath('reference.docx')
+            s,error = pandoc.convert_write(content.encode(PAGE_ENCODING), 'markdown', dd.abspath(), 'docx',
+                                           extra_args=['--reference-docx={}'.format(ref)], cwd=self.srcfile.dirname)
             if error:
                 log(error)
 
