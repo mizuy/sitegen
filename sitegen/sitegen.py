@@ -190,6 +190,10 @@ class HeadElement:
                 self.add_child(None, "no title")
             return self.children[-1].get_child_last(level)
 
+    def write_c(self, out):
+        if len(self.children)==1:
+            self.children[0].write_children(out)
+
     def write(self, out):
         out.write('<li>')
 
@@ -248,7 +252,7 @@ class TocParser(HTMLParser):
 
     def get_toc(self):
         out = io.StringIO()
-        self.heads.write_children(out)
+        self.heads.write_c(out)
         return out.getvalue()
 
 class TemplateEngine:
