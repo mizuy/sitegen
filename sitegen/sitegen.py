@@ -329,37 +329,13 @@ class Pandoc:
 
 pandoc = Pandoc()
 
-class Site:
-    """
-        Site generate a list of pages from basedir
-    """
-    def __init__(self, basedir, template_engine):
-        self.basedir = basedir
-        self.template_engine = template_engine
+def asciidoc_convert(src, extra_args=[], cwd=None):
+    args = ['asciidoc', '-s', '-o', '-', '-']
+    args.extend(extra_args)
+    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
+    data,error = p.communicate(src)
+    return data, error
 
-        # todo load .ignore file
-        self.pages = {}
-
-        log('Loading source files...')
-
-        for abspath, relpath in all_files(basedir, IGNORE_LIST):
-            srcfile = File(basedir, relpath)
-
-            with report_exceptions():
-                if srcfile.suffix in ['.md', '.markdown']:
-                    page = PageMarkdown(srcfile, template_engine)
-                else:
-                    page = PageFile(srcfile)
-                self.pages[page.dstpath] = page
-
-        log('Loaded {0} files'.format(len(self.pages)))
-
-    def __iter__(self):
-        for p in self.pages.values():
-            yield p
-
-    def get_page(self, path):
-        return self.pages.get(path)
 
 class PageBase:
     """
@@ -493,6 +469,67 @@ class PageMarkdown(PageTemplated):
     def another_dstfiles(self, dstbasedir):
         dstfile = self.dstfile(dstbasedir)
         return [dstfile.change_ext('docx')]
+
+class PageAsciidoc(PageTemplated):
+    def __init__(self, srcfile, template_engine):
+        super(PageAsciidoc, self).__init__(srcfile, template_engine)
+
+    def _write(self, dstfile):
+        with report_exceptions():
+            print(self)
+            source = open(self.srcfile.filename, 'r').read()
+            metadata = {}
+
+            print(source)
+            s,error = asciidoc_convert(source.encode(PAGE_ENCODING), cwd=self.srcfile.dirname)
+            if s.strip():
+                body = s.decode(PAGE_ENCODING)
+            else:
+                title = 'ERROR'
+                toc = ''
+                body = '<pre>{}</pre>'.format(error.decode(PAGE_ENCODING))
+
+            with open(dstfile.filename, 'wb') as f:
+                f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
+
+            if error:
+                log(error)
+
+
+class Site:
+    """
+        Site generate a list of pages from basedir
+    """
+    def __init__(self, basedir, template_engine):
+        self.basedir = basedir
+        self.template_engine = template_engine
+
+        # todo load .ignore file
+        self.pages = {}
+
+        log('Loading source files...')
+
+        for abspath, relpath in all_files(basedir, IGNORE_LIST):
+            srcfile = File(basedir, relpath)
+
+            with report_exceptions():
+                if srcfile.suffix in ['.md', '.markdown']:
+                    page = PageMarkdown(srcfile, template_engine)
+                elif srcfile.suffix in ['.adoc', '.asc', '.asciidoc']:
+                    page = PageAsciidoc(srcfile, template_engine)
+                else:
+                    page = PageFile(srcfile)
+                self.pages[page.dstpath] = page
+
+        log('Loaded {0} files'.format(len(self.pages)))
+
+    def __iter__(self):
+        for p in self.pages.values():
+            yield p
+
+    def get_page(self, path):
+        return self.pages.get(path)
+
 
 class SiteGenerator:
     def __init__(self, srcdir, dstdir, templatedir=None):
