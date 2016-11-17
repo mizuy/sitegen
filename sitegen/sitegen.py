@@ -24,6 +24,8 @@ from html.parser import HTMLParser
 DEBUG = False
 PAGE_ENCODING = 'UTF-8'
 DEFAULT_TEMPLATE = 'default.j2.html'
+MARKDOWN_TEMPLATE = 'markdown.j2.html'
+ASCIIDOC_TEMPLATE = 'asciidoc.j2.html'
 IGNORE_LIST = ['.', '.*','_', '*~', '#*#']
 
 def makedirs(directory):
@@ -193,6 +195,8 @@ class HeadElement:
     def write_c(self, out):
         if len(self.children)==1:
             self.children[0].write_children(out)
+        else:
+            self.write_children(out)
 
     def write(self, out):
         out.write('<li>')
@@ -231,7 +235,6 @@ class TocParser(HTMLParser):
         assert(0 < level)
 
         attrs = { k:v for (k,v) in attrs }
-
         aname = attrs.get('id')
 
         # parent
@@ -330,7 +333,7 @@ class Pandoc:
 pandoc = Pandoc()
 
 def asciidoc_convert(src, extra_args=[], cwd=None):
-    args = ['asciidoc', '-s', '-o', '-', '-']
+    args = ['asciidoc', '-a' 'mathjax', '-s', '-o', '-', '-']
     args.extend(extra_args)
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
     data,error = p.communicate(src)
@@ -376,11 +379,12 @@ class PageFile(PageBase):
         shutil.copy(self.srcfile.filename, dstfile.filename)
 
 class PageTemplated(PageBase):
-    def __init__(self, srcfile, template_engine):
+    def __init__(self, srcfile, template_engine, default_template):
         super(PageTemplated, self).__init__(srcfile, srcfile.change_ext('html').path)
         self.depth = len(self.url.strip('/').split('/')) - 1
         self.root = '/'.join(['..'] * (self.depth)) if self.depth>0 else '.'
         self.template_engine = template_engine
+        self.default_template = default_template
 
         def link(depth):
             if depth==0:
@@ -405,7 +409,7 @@ class PageTemplated(PageBase):
         metadata['parts'] = self.parts
         metadata['mtime'] = self.srcfile.mtime()
 
-        template = metadata.get('template') or DEFAULT_TEMPLATE
+        template = metadata.get('template') or self.default_template
         return self.template_engine.render(template, metadata)
 
     def _write(self, dstfile):
@@ -417,7 +421,7 @@ class PageTemplated(PageBase):
 
 class PageMarkdown(PageTemplated):
     def __init__(self, srcfile, template_engine):
-        super(PageMarkdown, self).__init__(srcfile, template_engine)
+        super(PageMarkdown, self).__init__(srcfile, template_engine, MARKDOWN_TEMPLATE)
 
     def _write(self, dstfile):
         with report_exceptions():
@@ -435,20 +439,20 @@ class PageMarkdown(PageTemplated):
                 extra_args.append('--csl='+csl)
 
             s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.dirname)
-            if not s.strip():
+            if not s.strip() or error:
                 title = 'ERROR'
                 toc = ''
                 body = '<pre>{}</pre>'.format(error.decode(PAGE_ENCODING))
             else:
-                title, toc, body = s.decode(PAGE_ENCODING).split('<><><><>')
+                title, toc_, body = s.decode(PAGE_ENCODING).split('<><><><>')
                 title = title.strip()
 
-                body = body.replace('<table>','<table class="table table-hover table-condensed table-bordered">') # TODO: dirty ad-hoc
-                body = body.replace('[TOC]', toc)
+                # body = body.replace('<table>','<table class="table table-hover table-condensed table-bordered">') # TODO: dirty ad-hoc
+                # body = body.replace('[TOC]', toc)
 
                 toc = TocParser(body).get_toc().strip()
-                if error:
-                    log(error)
+                body = body.replace('[TOC]', toc)
+
 
             if title:
                 metadata['title'] = title
@@ -472,15 +476,13 @@ class PageMarkdown(PageTemplated):
 
 class PageAsciidoc(PageTemplated):
     def __init__(self, srcfile, template_engine):
-        super(PageAsciidoc, self).__init__(srcfile, template_engine)
+        super(PageAsciidoc, self).__init__(srcfile, template_engine, ASCIIDOC_TEMPLATE)
 
     def _write(self, dstfile):
         with report_exceptions():
-            print(self)
             source = open(self.srcfile.filename, 'r').read()
             metadata = {}
 
-            print(source)
             s,error = asciidoc_convert(source.encode(PAGE_ENCODING), cwd=self.srcfile.dirname)
             if s.strip():
                 body = s.decode(PAGE_ENCODING)

@@ -1,42 +1,33 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
-"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
-    <head>
-        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-        <title>{{title}}{{' - ' if sitename and title}}{{sitename}}</title>
-        <link rel="stylesheet" type="text/css" href="{{root}}/css/pygment.css" />
-        <link rel="stylesheet" type="text/css" href="{{root}}/css/default.css" />
-        <script type="text/javascript"
-                src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
-        </script>
-        <script type="text/x-mathjax-config">
-          MathJax.Hub.Config({
-          tex2jax: {
-          inlineMath: [ ['$','$'], ["\\(","\\)"] ],
-          displayMath: [ ["$$","$$"], ["\\[","\\]"] ],
-          processEscapes: true
-          }
-          });
-        </script>
-    </head>
-    <body>
-        <div id="main">
-            <div id="header">
-              <a href="{{root}}/index.html">{{sitename or 'Index'}}</a> >>
-              {% block header %}
-              {% for link, name in parts %}
-                   / <a href="{{link}}">{{name}}</a>
-              {% endfor %}
-              {% endblock header %}
-            </div>
-            <div id="content">
-                {% block contents %}{{ contents }}{% endblock contents %}
-            </div>
-            <div id="footer">
-              (C) 2012 MIZUGUCHI Yasuhiko, gnerated by sitegen, Python.
-            </div>
-        </div>
-    </body>
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<title>{{title or url}}{{' - ' if sitename and (title or url)}}{{sitename}}</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" type="text/css" href="{{root}}/css/w3.css">
+<link rel="stylesheet" type="text/css" href="{{root}}/css/w3-theme-teal.css">
+</head>
 
+<body>
+
+<div class="w3-main">
+  <header class="w3-container w3-theme w3-padding-32">
+    <a href="{{root}}/index.html">{{sitename}}</a>
+    <h1 class="w3-xxlarge w3-padding-16">{{title}}</h1>
+  </header>
+
+  <div id="main" class="w3-container w3-padding-32">
+  {% block contents %}{{ contents }}{% endblock contents %}
+  </div>
+
+  <footer class="w3-container w3-theme">
+  <p class="text-muted">(C) 2016 mizuy, gnerated by <a href="https://github.com/mizuy/sitegen">sitegen</a>, Python, pandoc, asciidoc, w3.css.</p>
+  </footer>
+</div>
+
+<script type="text/javascript"
+        src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+<script type="text/x-mathjax-config">MathJax.Hub.Config({tex2jax: {inlineMath: [ ['$','$'], ["\\(","\\)"] ],displayMath: [ ["$$","$$"], ["\\[","\\]"] ],processEscapes: true}});</script>
+
+</body>
 </html>
