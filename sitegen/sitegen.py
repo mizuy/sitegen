@@ -27,6 +27,7 @@ DEFAULT_TEMPLATE = 'default.j2.html'
 MARKDOWN_TEMPLATE = 'markdown.j2.html'
 ASCIIDOC_TEMPLATE = 'asciidoc.j2.html'
 IGNORE_LIST = ['.', '.*','_', '*~', '#*#']
+GENERATE_DOCX = False
 
 def makedirs(directory):
     if os.path.exists(directory):
@@ -168,7 +169,7 @@ def all_files(basedir, ignore_list=None):
             yield abspath, relpath
 
 
-class HeadElement:
+class TocElement:
     def __init__(self, level=0, aname=None, data=""):
         self.level = level
         self.aname = aname
@@ -179,7 +180,7 @@ class HeadElement:
         self.data += data
 
     def add_child(self, aname=None, data=""):
-        e = HeadElement(self.level+1, aname, data)
+        e = TocElement(self.level+1, aname, data)
         self.children.append(e)
         return e
 
@@ -198,12 +199,16 @@ class HeadElement:
         else:
             self.write_children(out)
 
-    def write(self, out):
-        out.write('<li>')
-
+    def text(self):
         text = self.data
         if len(self.data) > 10 and ';' in self.data:
             text = self.data.split(';')[0]
+        return text
+
+    def write(self, out):
+        out.write('<li>')
+
+        text = self.text()
 
         if self.aname:
             out.write('<a href="#{}">{}</a>'.format(self.aname, text))
@@ -223,7 +228,9 @@ class TocParser(HTMLParser):
     def __init__(self, input):
         HTMLParser.__init__(self)
         self._current = None
-        self.heads = HeadElement()
+        self.heads = TocElement()
+        self.title_ = None
+        self.title_level_ = 100
         self.feed(input)
 
     def handle_starttag(self, tag, attrs):
@@ -243,6 +250,13 @@ class TocParser(HTMLParser):
 
         self._current = e
 
+        # title is first topmost hx tag.
+        if level < self.title_level_:
+            self.title_ = e
+        elif (level == self.title_level_) and not self.title_:
+            self.title_ = e
+
+
     def handle_endtag(self, tag):
         m = re.match('h(\d)',tag)
         if not m:
@@ -257,6 +271,11 @@ class TocParser(HTMLParser):
         out = io.StringIO()
         self.heads.write_c(out)
         return out.getvalue()
+
+    def get_title(self):
+        if self.title_:
+            return self.title_.text()
+        return None
 
 class TemplateEngine:
     def __init__(self, templatedir=None):
@@ -444,13 +463,11 @@ class PageMarkdown(PageTemplated):
                 toc = ''
                 body = '<pre>{}</pre>'.format(error.decode(PAGE_ENCODING))
             else:
-                title, toc_, body = s.decode(PAGE_ENCODING).split('<><><><>')
-                title = title.strip()
+                title_, toc_, body = s.decode(PAGE_ENCODING).split('<><><><>')
 
-                # body = body.replace('<table>','<table class="table table-hover table-condensed table-bordered">') # TODO: dirty ad-hoc
-                # body = body.replace('[TOC]', toc)
-
-                toc = TocParser(body).get_toc().strip()
+                tp = TocParser(body)
+                title = title_.strip() or tp.get_title()
+                toc = tp.get_toc().strip()
                 body = body.replace('[TOC]', toc)
 
 
@@ -463,16 +480,19 @@ class PageMarkdown(PageTemplated):
             with open(dstfile.filename, 'wb') as f:
                 f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
 
-            dd = dstfile.change_ext('docx')
-            ref = os.path.abspath('reference.docx')
-            s,error = pandoc.convert_write(content.encode(PAGE_ENCODING), 'markdown', dd.abspath(), 'docx',
-                                           extra_args=['--reference-docx={}'.format(ref)], cwd=self.srcfile.dirname)
-            if error:
-                log(error)
+            if GENERATE_DOCX:
+                dd = dstfile.change_ext('docx')
+                ref = os.path.abspath('reference.docx')
+                s,error = pandoc.convert_write(content.encode(PAGE_ENCODING), 'markdown', dd.abspath(), 'docx',
+                                               extra_args=['--reference-docx={}'.format(ref)], cwd=self.srcfile.dirname)
+                if error:
+                    log(error)
 
     def another_dstfiles(self, dstbasedir):
-        dstfile = self.dstfile(dstbasedir)
-        return [dstfile.change_ext('docx')]
+        if GENERATE_DOCX:
+            dstfile = self.dstfile(dstbasedir)
+            return [dstfile.change_ext('docx')]
+        return []
 
 class PageAsciidoc(PageTemplated):
     def __init__(self, srcfile, template_engine):
@@ -484,12 +504,21 @@ class PageAsciidoc(PageTemplated):
             metadata = {}
 
             s,error = asciidoc_convert(source.encode(PAGE_ENCODING), cwd=self.srcfile.dirname)
-            if s.strip():
-                body = s.decode(PAGE_ENCODING)
-            else:
+            if not s.strip() or error:
                 title = 'ERROR'
                 toc = ''
                 body = '<pre>{}</pre>'.format(error.decode(PAGE_ENCODING))
+            else:
+                body = s.decode(PAGE_ENCODING)
+
+                tp = TocParser(body)
+                title = tp.get_title()
+                toc = tp.get_toc().strip()
+                body = body.replace(':toc:', toc)
+
+            if title:
+                metadata['title'] = title
+            metadata['toc'] = toc
 
             with open(dstfile.filename, 'wb') as f:
                 f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))

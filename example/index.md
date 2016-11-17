@@ -3,12 +3,19 @@
 Table of Contents:
 [TOC]
 
-## hoge
+# Markdown example
 
 - [markdown](markdown.html)
+- [bibliography](bibliography.html)
 - [mathjax](mathjax.html)
 
 
-## hogehoge
+# Asciidoc example
+
+- [asciidoc](asciidoc.html)
+- [ventilator](ventilator.html)
+- [mathjax2](mathjax2.html)
+
+# Subdir
 
 - [subdir](subdir/index.html)

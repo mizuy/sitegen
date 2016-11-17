@@ -1,7 +1,5 @@
 ---
    template: markdown_src.j2.html
-   bibliography: my.bib
-   csl: nature.csl
 ---
 % Markdown
 
@@ -187,7 +185,6 @@ a title](http://fsf.org "click here for a good time!").
 
 [my label 5]: <http://foo.bar.baz>
 
-[my label 3]: http://fsf.org "The free software foundation"
   
   
   Here is [my link][FOO]
@@ -225,13 +222,6 @@ $$
 
 [more example](mathjax.html)
 
-## bibliography
-
-metadataのbibliographyに相対パスでbibtex fileを指定する。
-
-CSLを指定したい場合は、$HOME/.csl 以下において、metadataのcslで指定する。Referenceは自動的にページの最後に列挙される。
-
-Oxidative Bisulfite Sequencing[@Booth:2012fh].
 
 ## footnote
 
@@ -254,6 +244,3 @@ Here is a footnote reference,[^1] and another.[^longnote]
 This paragraph won't be part of the note, because it
 isn't indented.
 
-## References
-
-ここに自動的にbibliographyが列挙される。
