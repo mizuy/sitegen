@@ -5,21 +5,16 @@
 # based on http://obraz.pirx.ru/
 # install requirements: Jinja2, PyYAML, pandoc(from cabal)
 
-import sys
-import io
-import traceback
-import os
-import re
-import shutil
-import fnmatch
+import sys, os, io, re, traceback, errno
+import shutil, fnmatch, yaml
 from contextlib import contextmanager
-import errno
-import yaml
 import subprocess
 from jinja2 import Environment, FileSystemLoader, ChoiceLoader, PackageLoader
 from jinja2.exceptions import TemplateSyntaxError
 from pathlib import Path
 from html.parser import HTMLParser
+from pyquery import PyQuery as pq
+
 
 DEBUG = False
 PAGE_ENCODING = 'UTF-8'
@@ -38,45 +33,6 @@ def makedirs(directory):
     except OSError as e:
         if e.errno == errno.EEXIST:
             pass
-
-def load_metadata(source):
-    """
-    split file contents into metadata and remaining contents
-
-    metadata is yaml formatted data at head tagged by two '---' lines
-
-        ---
-        yaml formatted metadata
-        ---
-        contents
-    """
-    SPLIT = r'^---+\s*'
-    metadata = {}
-    line_offset = 0
-    content = source
-
-    i = 0
-    lines = source.splitlines()
-
-    while i < len(lines):
-        if not lines[i].strip():
-            i += 1
-            continue
-        if re.match(SPLIT, lines[i]):
-            i += 1
-            yaml_start = i
-            while i < len(lines):
-                if re.match(SPLIT, lines[i]):
-                    yaml_end = i
-                    i += 1
-                    break
-                i += 1
-            metadata = yaml.load('\n'.join(lines[yaml_start:yaml_end])) or metadata
-            line_offset = yaml_end+1
-            content = '\n'.join(lines[line_offset:])
-        else:
-            break
-    return metadata, line_offset, content
 
 def remove(path):
     try:
@@ -128,117 +84,72 @@ def all_files(basedir, ignore_list=None):
             if ignore_list and not is_ignored(relpath, ignore_list):
                 continue
 
-            yield abspath, relpath
+            yield Path(relpath)
 
+def load_metadata(source):
+    """
+    split file contents into metadata and remaining contents
 
-class TocElement:
-    def __init__(self, level=0, aname=None, data=""):
-        self.level = level
-        self.aname = aname
-        self.data = data
-        self.children = []
+    metadata is yaml formatted data at head tagged by two '---' lines
 
-    def add_data(self, data):
-        self.data += data
+        ---
+        yaml formatted metadata
+        ---
+        contents
+    """
+    SPLIT = r'^---+\s*'
+    metadata = {}
+    line_offset = 0
+    content = source
 
-    def add_child(self, aname=None, data=""):
-        e = TocElement(self.level+1, aname, data)
-        self.children.append(e)
-        return e
+    i = 0
+    lines = source.splitlines()
 
-    def get_child_last(self, level):
-        if level==self.level:
-            return self
+    while i < len(lines):
+        if not lines[i].strip():
+            i += 1
+            continue
+        if re.match(SPLIT, lines[i]):
+            i += 1
+            yaml_start = i
+            while i < len(lines):
+                if re.match(SPLIT, lines[i]):
+                    yaml_end = i
+                    i += 1
+                    break
+                i += 1
+            metadata = yaml.load('\n'.join(lines[yaml_start:yaml_end])) or metadata
+            line_offset = yaml_end+1
+            content = '\n'.join(lines[line_offset:])
         else:
-            assert(level > self.level)
-            if not self.children:
-                self.add_child(None, "no title")
-            return self.children[-1].get_child_last(level)
+            break
+    return metadata, line_offset, content
 
-    def write_c(self, out):
-        if len(self.children)==1:
-            self.children[0].write_children(out)
-        else:
-            self.write_children(out)
+def generate_title_toc(body):
+    q = pq(body)
+    title = q('title').text()
+    out = pq('<ul class="toc"></ul>')
 
-    def text(self):
-        text = self.data
-        if len(self.data) > 10 and ';' in self.data:
-            text = self.data.split(';')[0]
-        return text
+    def get_last_child(e, level):
+        if level==0:
+            return e
+        if level>0:
+            ee = e.children('ul:last-child')
+            if not ee:
+                #e.append('<li>no title</li>')
+                e.append('<ul></ul>')
+                ee = e.children('ul:last-child')
+            return get_last_child(ee, level-1)
 
-    def write(self, out):
-        out.write('<li>')
+    for tag in q('h1, h2, h3').items():
+        level = int(tag[0].tag[1])-1
+        assert(0<=level)
+        aname = tag.attr('id')
+        pp = get_last_child(out, level)
+        pp.append(f'<li id="{aname}">{tag.text()}<>')
 
-        text = self.text()
+    return title, out.wrap('<div id="toc"></div>').html()
 
-        if self.aname:
-            out.write(f'<a href="#{self.aname}">{text}</a>')
-        else:
-            out.write(f'{text}')
-        if self.children:
-            out.write('<ul class="nav">\n')
-            self.write_children(out)
-            out.write('</ul>\n')
-        out.write('</li>\n')
-
-    def write_children(self, out):
-        for c in self.children:
-            c.write(out)
-
-class TocParser(HTMLParser):
-    def __init__(self, input):
-        HTMLParser.__init__(self)
-        self._current = None
-        self.heads = TocElement()
-        self.title_ = None
-        self.title_level_ = 100
-        self.feed(input)
-
-    def handle_starttag(self, tag, attrs):
-        m = re.match('h(\d)',tag)
-        if not m:
-            return
-
-        level = int(m.group(1))
-        assert(0 < level)
-
-        attrs = { k:v for (k,v) in attrs }
-        aname = attrs.get('id')
-
-        # parent
-        parent = self.heads.get_child_last(level-1)
-        e = parent.add_child(aname)
-
-        self._current = e
-
-        # title is first topmost hx tag.
-        if level < self.title_level_:
-            self.title_ = e
-            self.title_level_ = level
-        elif (level == self.title_level_) and (self.title_==None):
-            self.title_ = e
-
-
-    def handle_endtag(self, tag):
-        m = re.match('h(\d)',tag)
-        if not m:
-            return
-        self._current = None
-
-    def handle_data(self, data):
-        if self._current:
-            self._current.add_data(data)
-
-    def get_toc(self):
-        out = io.StringIO()
-        self.heads.write_c(out)
-        return out.getvalue()
-
-    def get_title(self):
-        if self.title_:
-            return self.title_.text()
-        return None
 
 class TemplateEngine:
     def __init__(self, templatedir=None):
@@ -266,9 +177,9 @@ class TemplateEngine:
 
     def lastmodified(self):
         "return if one of the template is updated."
-        lm = os.path.getmtime(os.path.abspath(__file__))
+        lm = Path(__file__).stat().st_mtime
         if self.templatedir:
-            lm = max(lm, max(os.path.getmtime(abspath) for abspath, relpath in all_files(self.templatedir, IGNORE_LIST)))
+            lm = max(lm, max(self.templatedir.joinpath(path).stat().st_mtime for path in all_files(self.templatedir, IGNORE_LIST)))
         return lm
 
 class Pandoc:
@@ -318,7 +229,7 @@ class Pandoc:
 pandoc = Pandoc()
 
 def asciidoc_convert(src, extra_args=[], cwd=None):
-    args = ['asciidoctor', '-s', '-o', '-', '-']
+    args = ['asciidoctor', '-o', '-', '-']
     # args = ['asciidoc', '-a' 'mathjax', '-s', '-o', '-', '-']
     args.extend(extra_args)
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
@@ -382,20 +293,9 @@ class PageTemplated(PageBase):
         super(PageTemplated, self).__init__(basedir, srcpath)
         self.dstpath = srcpath.with_suffix('.html')
         self.depth = len(self.dstpath.parts)-1
-        #self.depth = len(self.url.strip('/').split('/')) - 1
         self.root = '/'.join(['..'] * (self.depth)) if self.depth>0 else '.'
         self.template_engine = template_engine
         self.default_template = default_template
-
-        """
-        def link(depth):
-            if depth==0:
-                return './' + self.dstpath
-            elif depth==1:
-                return './index.html'
-            else:
-                return '/'.join(['..'] * (depth-1)) + '/index.html'
-        """
 
         """
         parts = [(link, name)]
@@ -442,15 +342,6 @@ class PageTemplated(PageBase):
         template = metadata.get('template') or self.default_template
         return self.template_engine.render(template, metadata)
 
-    '''
-    def _write(self, dstfile):
-        contents = self.srcfile.open().read().decode(PAGE_ENCODING)
-        metadata = {}
-        render = self.render_template(contents, metadata)
-        with open(dstfile.filename, 'wb') as f:
-            f.write(render.encode(PAGE_ENCODING))
-    '''
-
 class PageMarkdown(PageTemplated):
     def __init__(self, basedir, srcpath, template_engine):
         super(PageMarkdown, self).__init__(basedir, srcpath, template_engine, MARKDOWN_TEMPLATE)
@@ -481,10 +372,7 @@ class PageMarkdown(PageTemplated):
                 body = f'<pre>{error.decode(PAGE_ENCODING)}</pre>'
             else:
                 title_, toc_, body = s.decode(PAGE_ENCODING).split('<><><><>')
-
-                tp = TocParser(body)
-                title = title_.strip() or tp.get_title()
-                toc = tp.get_toc().strip()
+                title, toc = generate_title_toc(body)
                 body = body.replace('[TOC]', toc)
 
             if title:
@@ -532,12 +420,10 @@ class PageAsciidoc(PageTemplated):
                 toc = ''
                 body = f'<pre>{error.decode(PAGE_ENCODING)}</pre><div>{s}</div>'
             else:
-                body = s
-
-                tp = TocParser(body)
-                title = tp.get_title()
-                toc = tp.get_toc().strip()
+                title, toc = generate_title_toc(s)
+                body = pq(s)('body').html()
                 body = body.replace(':toc:', toc)
+                #body = toc + body
 
             if title:
                 metadata['title'] = title
@@ -559,12 +445,11 @@ class Site:
         self.template_engine = template_engine
         self.pages = []
 
-        log('Loading source files...')
+        #log('Loading source files...')
 
         dstpaths = []
 
-        for abspath, relpath in all_files(basedir, IGNORE_LIST):
-            srcpath = Path(relpath)
+        for srcpath in all_files(basedir, IGNORE_LIST):
             suffix = srcpath.suffix
 
             with report_exceptions():
@@ -573,12 +458,12 @@ class Site:
                 elif suffix in ['.adoc', '.asc', '.asciidoc']:
                     page = PageAsciidoc(basedir, srcpath, template_engine)
                 else:
-                    page = PageFile(basedir, relpath)
+                    page = PageFile(basedir, srcpath)
 
                 for d in page.dstpaths():
                     if d in dstpaths:
-                        log(f'destination file overlapped: {d} from {page.srcpath}')
-                        dstpaths.append(d)
+                        log(f'WARNING: destination file overlapped: {d} from {page.srcpath}')
+                    dstpaths.append(d)
 
                 self.pages.append(page)
 
@@ -598,21 +483,15 @@ class SiteGenerator:
 
     def generate(self):
         makedirs(self.dstdir)
-        current_dst = set(Path(abspath) for abspath, relpath in all_files(self.dstdir))
-
-        next_dst = set()
-        for page in self.site:
-            for d in page.dstpaths():
-                next_dst.add(self.dstdir.joinpath(d))
-
-        print(current_dst)
-        print(next_dst)
-
+        current_dst = set(all_files(self.dstdir))
+        next_dst = {d for page in self.site for d in page.dstpaths()}
         deleted_dst = current_dst - next_dst
-        log(f'delete {len(deleted_dst)} abandoned files from destination directory')
-        for f in deleted_dst:
-            log(f'delete {f}')
-            remove(f)
+
+        if len(deleted_dst) > 0:
+            log(f'delete {len(deleted_dst)} abandoned files from destination directory')
+            for f in deleted_dst:
+                log(f'delete {f}')
+                remove(f)
 
         tl = self.template_engine.lastmodified()
 
@@ -630,11 +509,11 @@ class SiteGenerator:
                     update = True
 
             if update:
+                log(f'generating {page.url}...')
                 try:
-                    log(f'generating {page.url}...')
                     page.generate(self.dstdir)
                 except KeyboardInterrupt:
-                    print('Keyboard interrupted.')
+                    log('Keyboard interrupted.')
                     return
                 except:
                     remove(dst)

@@ -26,7 +26,7 @@ setup(name='sitegen',
       url='http://github.com/mizuy/sitegen',
       license='MIT',
       packages=find_packages(),
-      install_requires=['Jinja2',  'PyYAML'],
+      install_requires=['Jinja2',  'PyYAML', 'bs4', 'lxml'],
       entry_points=\
 """
 [console_scripts]
