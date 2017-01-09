@@ -18,7 +18,7 @@ import yaml
 import subprocess
 from jinja2 import Environment, FileSystemLoader, ChoiceLoader, PackageLoader
 from jinja2.exceptions import TemplateSyntaxError
-
+from pathlib import Path
 from html.parser import HTMLParser
 
 DEBUG = False
@@ -26,8 +26,9 @@ PAGE_ENCODING = 'UTF-8'
 DEFAULT_TEMPLATE = 'default.j2.html'
 MARKDOWN_TEMPLATE = 'markdown.j2.html'
 ASCIIDOC_TEMPLATE = 'asciidoc.j2.html'
-IGNORE_LIST = ['.', '.*','_', '*~', '#*#']
+IGNORE_LIST = ['.', '.*','_', '*~', '#*#'] # TODO load ignore file
 GENERATE_DOCX = False
+DOCX_TEMPLATE = 'reference.docx'
 
 def makedirs(directory):
     if os.path.exists(directory):
@@ -37,45 +38,6 @@ def makedirs(directory):
     except OSError as e:
         if e.errno == errno.EEXIST:
             pass
-
-class File:
-    def __init__(self, basedir, path):
-        self.basedir = basedir
-        self.path = path
-        self.filename = os.path.join(basedir, path)
-        self.basename = os.path.basename(self.filename)
-        self.dirname = os.path.dirname(self.filename)
-        _, self.suffix = os.path.splitext(self.basename)
-
-    def exists(self):
-        return os.path.exists(self.filename)
-
-    def mtime(self):
-        return os.path.getmtime(self.filename)
-
-    def open(self):
-        return open(self.filename, 'rb')
-
-    def makedirs(self):
-        makedirs(self.dirname)
-
-    def remove(self):
-        try:
-            os.remove(self.filename)
-        except OSError as e:
-            if e.errno == errno.EEXIST:
-                pass
-
-    def change_ext(self, ext):
-        """
-          ex. ext = '.docx' or 'docx'
-        """
-        a, _ = os.path.splitext(self.path)
-        e = ext.lstrip('.')
-        return File(self.basedir,'{}.{}'.format(a,e))
-
-    def abspath(self):
-        return os.path.abspath(self.filename)
 
 def load_metadata(source):
     """
@@ -127,7 +89,7 @@ def remove(path):
             pass
 
 def log(message):
-    sys.stderr.write('{0}\n'.format(message))
+    sys.stderr.write(f'{message}\n')
     sys.stderr.flush()
 
 def print_exception_traceback():
@@ -211,9 +173,9 @@ class TocElement:
         text = self.text()
 
         if self.aname:
-            out.write('<a href="#{}">{}</a>'.format(self.aname, text))
+            out.write(f'<a href="#{self.aname}">{text}</a>')
         else:
-            out.write('{}'.format(text))
+            out.write(f'{text}')
         if self.children:
             out.write('<ul class="nav">\n')
             self.write_children(out)
@@ -253,7 +215,8 @@ class TocParser(HTMLParser):
         # title is first topmost hx tag.
         if level < self.title_level_:
             self.title_ = e
-        elif (level == self.title_level_) and not self.title_:
+            self.title_level_ = level
+        elif (level == self.title_level_) and (self.title_==None):
             self.title_ = e
 
 
@@ -290,13 +253,16 @@ class TemplateEngine:
 
         self.env = Environment(loader=loader)
 
+    def get_template(self, name):
+        return self.env.get_template(name)
+
     def render(self, template, metadata):
         try:
             t = self.env.get_template(template)
             # env.from_string()
             return t.render(**metadata)
         except TemplateSyntaxError as e:
-            raise Exception("{0}:{1}: {2}, {3}".format(e.filename, e.lineno, e.name, e.message))
+            raise Exception(f"{e.filename}:{e.lineno}: {e.name}, {e.message}")
 
     def lastmodified(self):
         "return if one of the template is updated."
@@ -352,22 +318,26 @@ class Pandoc:
 pandoc = Pandoc()
 
 def asciidoc_convert(src, extra_args=[], cwd=None):
-    args = ['asciidoc', '-a' 'mathjax', '-s', '-o', '-', '-']
+    args = ['asciidoctor', '-s', '-o', '-', '-']
+    # args = ['asciidoc', '-a' 'mathjax', '-s', '-o', '-', '-']
     args.extend(extra_args)
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
     data,error = p.communicate(src)
     return data, error
 
-
 class PageBase:
     """
         Page knows dstpath, but don't know destination directory.
+        basedir = base directory
+        srcpath = src path
+        srcfile = basepath + srcpath
+        dstfiles = dst_basedir + dstpaths
     """
-    def __init__(self, srcfile, dstpath=None):
-        self.srcfile = srcfile
-        self.dstpath = dstpath or srcfile.path
-        self.url = os.path.sep + self.dstpath
-        self.basename = os.path.basename(self.url)
+    def __init__(self, basedir, srcpath):
+        self.basedir = Path(basedir)
+        self.srcpath = Path(srcpath)
+        self.srcfile = self.basedir.joinpath(srcpath)
+        self.url = str(self.srcpath)
 
     def dependencies(self):
         """
@@ -375,50 +345,91 @@ class PageBase:
         """
         return []
 
-    def dstfile(self, dstbasedir):
-        return File(dstbasedir, self.dstpath)
+    def generate(self, dstbasedir):
+        raise NotImplemented()
+
+    def dstpaths(self):
+        raise NotImplemented()
+
+    def __repr__(self):
+        return f"PageBase({self.srcfile})"
+
+class PageSingle(PageBase):
+    def __init__(self, basedir, srcpath, dstpath):
+        super(PageSingle,self).__init__(basedir, srcpath)
+        self.dstpath = dstpath or srcpath
 
     def generate(self, dstbasedir):
-        dstfile = self.dstfile(dstbasedir)
-        dstfile.makedirs()
-        self._write(dstfile)
+        df = dstbasedir.joinpath(self.dstpath)
+        makedirs(df.parent)
+        self._write(df)
 
-    def another_dstfiles(self, dstbasedir):
-        return []
+    def dstpaths(self):
+        return [self.dstpath]
 
     def _write(self, dstfile):
         raise NotImplemented()
 
-
-class PageFile(PageBase):
-    def __init__(self, srcfile):
-        super(PageFile, self).__init__(srcfile)
+class PageFile(PageSingle):
+    def __init__(self, basepath, srcpath):
+        super(PageFile, self).__init__(basepath, srcpath, dstpath=srcpath)
 
     def _write(self, dstfile):
-        shutil.copy(self.srcfile.filename, dstfile.filename)
+        shutil.copy(self.srcfile, dstfile)
 
 class PageTemplated(PageBase):
-    def __init__(self, srcfile, template_engine, default_template):
-        super(PageTemplated, self).__init__(srcfile, srcfile.change_ext('html').path)
-        self.depth = len(self.url.strip('/').split('/')) - 1
+    def __init__(self, basedir, srcpath, template_engine, default_template):
+        super(PageTemplated, self).__init__(basedir, srcpath)
+        self.dstpath = srcpath.with_suffix('.html')
+        self.depth = len(self.dstpath.parts)-1
+        #self.depth = len(self.url.strip('/').split('/')) - 1
         self.root = '/'.join(['..'] * (self.depth)) if self.depth>0 else '.'
         self.template_engine = template_engine
         self.default_template = default_template
 
+        """
         def link(depth):
             if depth==0:
-                return './' + self.basename
+                return './' + self.dstpath
             elif depth==1:
                 return './index.html'
             else:
                 return '/'.join(['..'] * (depth-1)) + '/index.html'
+        """
 
-        p, _ = os.path.splitext(self.url)
-        p = ['Index'] + p.strip('/').split('/')
+        """
+        parts = [(link, name)]
 
-        self.parts = [(link(i), pp) for i,pp in enumerate(p[::-1])][::-1]
-        if self.basename == 'index.html':
-            self.parts.pop()
+        ex.
+        a/b/c.html
+        (../../index.html, Index) 0
+        (../index.html, a) 1
+        (./index.html, b) 2
+        (., c) 3
+
+        ex.
+        a/b/index.html
+        (../../index.html, Index) 0
+        (../index.html, a) 1
+        (./index.html, b) 2
+
+        ex.
+        index.html
+        (./index.html, Index) 0
+
+        """
+
+        self.depth = len(self.dstpath.parts)-1
+        names = ['Index'] + list(self.dstpath.with_suffix('').parts)
+        self.parts = []
+        for i, name in enumerate(names):
+            if name=='index':
+                break
+            link = '/'.join(['..']*(self.depth-i)) + '/index.html'
+            self.parts.append((link, name))
+
+    def dstpaths(self):
+        return [self.dstpath]
 
     def render_template(self, contents, metadata={}):
         metadata['contents'] = contents
@@ -426,42 +437,48 @@ class PageTemplated(PageBase):
         metadata['root'] = self.root
         metadata['path'] = self.dstpath
         metadata['parts'] = self.parts
-        metadata['mtime'] = self.srcfile.mtime()
+        metadata['mtime'] = self.srcfile.stat().st_mtime
 
         template = metadata.get('template') or self.default_template
         return self.template_engine.render(template, metadata)
 
+    '''
     def _write(self, dstfile):
         contents = self.srcfile.open().read().decode(PAGE_ENCODING)
         metadata = {}
         render = self.render_template(contents, metadata)
         with open(dstfile.filename, 'wb') as f:
             f.write(render.encode(PAGE_ENCODING))
+    '''
 
 class PageMarkdown(PageTemplated):
-    def __init__(self, srcfile, template_engine):
-        super(PageMarkdown, self).__init__(srcfile, template_engine, MARKDOWN_TEMPLATE)
+    def __init__(self, basedir, srcpath, template_engine):
+        super(PageMarkdown, self).__init__(basedir, srcpath, template_engine, MARKDOWN_TEMPLATE)
+        self.dstpathdocx = self.dstpath.with_suffix('.docx')
 
-    def _write(self, dstfile):
+    def generate(self, dstbasedir):
+        dstfile = dstbasedir.joinpath(self.dstpath)
+        makedirs(dstfile.parent)
+
         with report_exceptions():
-            source =  open(self.srcfile.filename, 'r').read()
+            source =  open(self.srcfile, 'r').read()
             metadata, offset, content = load_metadata(source)
             extra_args=['--mathjax',
                         '--data-dir='+os.path.abspath(os.path.dirname(__file__)),
-                        '--template=vars',
+                        '--template=vars',                 # TODO delete vars templating
                         '--toc']
             if 'bibliography' in metadata:
-                bib = os.path.abspath(os.path.join(self.srcfile.dirname, metadata['bibliography']))
-                extra_args.append('--bibliography='+bib)
+                bib = self.srcfile.parent.joinpath(metadata['bibliography']).resolve()
+                extra_args.append(f'--bibliography={bib}')
             if 'csl' in metadata:
                 csl = metadata['csl']
                 extra_args.append('--csl='+csl)
 
-            s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.dirname)
+            s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.parent)
             if not s.strip() or error:
                 title = 'ERROR'
                 toc = ''
-                body = '<pre>{}</pre>'.format(error.decode(PAGE_ENCODING))
+                body = f'<pre>{error.decode(PAGE_ENCODING)}</pre>'
             else:
                 title_, toc_, body = s.decode(PAGE_ENCODING).split('<><><><>')
 
@@ -470,46 +487,52 @@ class PageMarkdown(PageTemplated):
                 toc = tp.get_toc().strip()
                 body = body.replace('[TOC]', toc)
 
-
             if title:
                 metadata['title'] = title
             metadata['toc'] = toc
             metadata['offset'] = offset
             metadata['source'] = source
 
-            with open(dstfile.filename, 'wb') as f:
+            with open(dstfile, 'wb') as f:
                 f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
 
             if GENERATE_DOCX:
-                dd = dstfile.change_ext('docx')
-                ref = os.path.abspath('reference.docx')
-                s,error = pandoc.convert_write(content.encode(PAGE_ENCODING), 'markdown', dd.abspath(), 'docx',
-                                               extra_args=['--reference-docx={}'.format(ref)], cwd=self.srcfile.dirname)
+                refer = Path('reference.docx').resolve()
+                s,error = pandoc.convert_write(content.encode(PAGE_ENCODING),
+                                               'markdown',
+                                               self.dstbasedir.joinpath(self.dstpathdocx).resolve(),
+                                               'docx',
+                                               extra_args=[f"--reference-docx={refer}"],
+                                               cwd=self.srcfile.parent)
                 if error:
                     log(error)
 
-    def another_dstfiles(self, dstbasedir):
+    def dstpaths(self):
         if GENERATE_DOCX:
-            dstfile = self.dstfile(dstbasedir)
-            return [dstfile.change_ext('docx')]
-        return []
+            return [self.dstpath, self.dstpathdocx]
+        else:
+            return [self.dstpath]
 
 class PageAsciidoc(PageTemplated):
-    def __init__(self, srcfile, template_engine):
-        super(PageAsciidoc, self).__init__(srcfile, template_engine, ASCIIDOC_TEMPLATE)
+    def __init__(self, basedir, srcpath, template_engine):
+        super(PageAsciidoc, self).__init__(basedir, srcpath, template_engine, ASCIIDOC_TEMPLATE)
 
-    def _write(self, dstfile):
+    def generate(self, dstbasedir):
+        dstfile = dstbasedir.joinpath(self.dstpath)
+        makedirs(dstfile.parent)
+
         with report_exceptions():
-            source = open(self.srcfile.filename, 'r').read()
+            source = open(self.srcfile, 'r').read()
             metadata = {}
 
-            s,error = asciidoc_convert(source.encode(PAGE_ENCODING), cwd=self.srcfile.dirname)
+            s,error = asciidoc_convert(source.encode(PAGE_ENCODING), cwd=self.srcfile.parent)
+            s = s.decode(PAGE_ENCODING)
             if not s.strip() or error:
                 title = 'ERROR'
                 toc = ''
-                body = '<pre>{}</pre>'.format(error.decode(PAGE_ENCODING))
+                body = f'<pre>{error.decode(PAGE_ENCODING)}</pre><div>{s}</div>'
             else:
-                body = s.decode(PAGE_ENCODING)
+                body = s
 
                 tp = TocParser(body)
                 title = tp.get_title()
@@ -520,7 +543,7 @@ class PageAsciidoc(PageTemplated):
                 metadata['title'] = title
             metadata['toc'] = toc
 
-            with open(dstfile.filename, 'wb') as f:
+            with open(dstfile, 'wb') as f:
                 f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
 
             if error:
@@ -532,79 +555,91 @@ class Site:
         Site generate a list of pages from basedir
     """
     def __init__(self, basedir, template_engine):
-        self.basedir = basedir
+        self.basedir = Path(basedir)
         self.template_engine = template_engine
-
-        # todo load .ignore file
-        self.pages = {}
+        self.pages = []
 
         log('Loading source files...')
 
+        dstpaths = []
+
         for abspath, relpath in all_files(basedir, IGNORE_LIST):
-            srcfile = File(basedir, relpath)
+            srcpath = Path(relpath)
+            suffix = srcpath.suffix
 
             with report_exceptions():
-                if srcfile.suffix in ['.md', '.markdown']:
-                    page = PageMarkdown(srcfile, template_engine)
-                elif srcfile.suffix in ['.adoc', '.asc', '.asciidoc']:
-                    page = PageAsciidoc(srcfile, template_engine)
+                if suffix in ['.md', '.markdown']:
+                    page = PageMarkdown(basedir, srcpath, template_engine)
+                elif suffix in ['.adoc', '.asc', '.asciidoc']:
+                    page = PageAsciidoc(basedir, srcpath, template_engine)
                 else:
-                    page = PageFile(srcfile)
-                self.pages[page.dstpath] = page
+                    page = PageFile(basedir, relpath)
 
-        log('Loaded {0} files'.format(len(self.pages)))
+                for d in page.dstpaths():
+                    if d in dstpaths:
+                        log(f'destination file overlapped: {d} from {page.srcpath}')
+                        dstpaths.append(d)
+
+                self.pages.append(page)
+
+        log(f'Loaded {len(self.pages)} files')
 
     def __iter__(self):
-        for p in self.pages.values():
+        for p in self.pages:
             yield p
-
-    def get_page(self, path):
-        return self.pages.get(path)
 
 
 class SiteGenerator:
     def __init__(self, srcdir, dstdir, templatedir=None):
         #self.dependencies = []
-        self.dstdir = dstdir
+        self.dstdir = Path(dstdir)
         self.template_engine = TemplateEngine(templatedir)
         self.site = Site(srcdir, self.template_engine)
 
     def generate(self):
         makedirs(self.dstdir)
-        current_dst = set(abspath for abspath, relpath in all_files(self.dstdir))
+        current_dst = set(Path(abspath) for abspath, relpath in all_files(self.dstdir))
 
         next_dst = set()
         for page in self.site:
-            next_dst.add(page.dstfile(self.dstdir).filename)
-            for i in page.another_dstfiles(self.dstdir):
-                next_dst.add(i.filename)
+            for d in page.dstpaths():
+                next_dst.add(self.dstdir.joinpath(d))
+
+        print(current_dst)
+        print(next_dst)
 
         deleted_dst = current_dst - next_dst
-        log('delete {0} abandoned files from destination directory'.format(len(deleted_dst)))
+        log(f'delete {len(deleted_dst)} abandoned files from destination directory')
         for f in deleted_dst:
-            log('delete {0}'.format(f))
+            log(f'delete {f}')
             remove(f)
 
         tl = self.template_engine.lastmodified()
 
         for page in self.site:
             src = page.srcfile
-            dst = page.dstfile(self.dstdir)
+            sm = max(src.stat().st_mtime, tl)
 
-            # TODO: more accurate dependency graph.
-            if dst.exists() and dst.mtime() > max(src.mtime(), tl):
-                continue
+            update = False
+            for dst in page.dstpaths():
+                dst = self.dstdir.joinpath(dst)
 
-            try:
-                log('generating {0}...'.format(page.url))
-                page.generate(self.dstdir)
-            except KeyboardInterrupt:
-                print('Keyboard interrupted.')
-                return
-            except:
-                dst.remove()
-                log('error while generating {0}'.format(page.url))
-                print_exception_traceback()
+                if dst.exists() and (dst.stat().st_mtime > sm):
+                    pass
+                else:
+                    update = True
+
+            if update:
+                try:
+                    log(f'generating {page.url}...')
+                    page.generate(self.dstdir)
+                except KeyboardInterrupt:
+                    print('Keyboard interrupted.')
+                    return
+                except:
+                    remove(dst)
+                    log('error while generating {page.url}')
+                    print_exception_traceback()
 
 
 def main():

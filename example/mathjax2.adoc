@@ -5,6 +5,8 @@ http://www.mathjax.org/demos/tex-samples/
 The following equations are represented in the HTML source code as LaTeX
 expressions.
 
+Asciidocはdouble dollarをpaththroghするためmathjax delimiterがつかえない
+
 .The Lorenz Equations
 
 \[$$
