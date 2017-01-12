@@ -1,6 +1,7 @@
 = Statistics
 
 :toc:
+[TOC]
 
 == 統計的検定
 

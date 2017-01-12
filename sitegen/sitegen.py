@@ -3,16 +3,14 @@
 # Static Site Generator powered by markdown and jinja2
 # Copyright (c) 2012-2016 MIZUGUCHI Yasuhiko
 # based on http://obraz.pirx.ru/
-# install requirements: Jinja2, PyYAML, pandoc(from cabal)
+# install requirements: Jinja2, PyYAML, pyquery, pandoc(from cabal), asciidoctor
 
-import sys, os, io, re, traceback, errno
+import sys, os, io, re, traceback, errno, subprocess
 import shutil, fnmatch, yaml
 from contextlib import contextmanager
-import subprocess
 from jinja2 import Environment, FileSystemLoader, ChoiceLoader, PackageLoader
 from jinja2.exceptions import TemplateSyntaxError
 from pathlib import Path
-from html.parser import HTMLParser
 from pyquery import PyQuery as pq
 
 
@@ -21,9 +19,9 @@ PAGE_ENCODING = 'UTF-8'
 DEFAULT_TEMPLATE = 'default.j2.html'
 MARKDOWN_TEMPLATE = 'markdown.j2.html'
 ASCIIDOC_TEMPLATE = 'asciidoc.j2.html'
+DOCX_TEMPLATE = 'reference.docx'
 IGNORE_LIST = ['.', '.*','_', '*~', '#*#'] # TODO load ignore file
 GENERATE_DOCX = False
-DOCX_TEMPLATE = 'reference.docx'
 
 def makedirs(directory):
     if os.path.exists(directory):
@@ -78,13 +76,12 @@ def is_ignored(filename, ignore_list):
 def all_files(basedir, ignore_list=None):
     for path, dirs, files in os.walk(basedir):
         for file in files:
-            abspath = os.path.join(path, file)
-            relpath = os.path.relpath(abspath, basedir)
+            p = os.path.relpath(os.path.join(path, file), basedir)
 
-            if ignore_list and not is_ignored(relpath, ignore_list):
+            if ignore_list and not is_ignored(p, ignore_list):
                 continue
 
-            yield Path(relpath)
+            yield Path(p)
 
 def load_metadata(source):
     """
@@ -146,7 +143,7 @@ def generate_title_toc(body):
         assert(0<=level)
         aname = tag.attr('id')
         pp = get_last_child(out, level)
-        pp.append(f'<li id="{aname}">{tag.text()}<>')
+        pp.append(f'<li><a href="#{aname}">{tag.text()}</a></li>')
 
     return title, out.wrap('<div id="toc"></div>').html()
 
@@ -250,12 +247,6 @@ class PageBase:
         self.srcfile = self.basedir.joinpath(srcpath)
         self.url = str(self.srcpath)
 
-    def dependencies(self):
-        """
-        return path of all templates and includes which are refered by this page directly or indirectly
-        """
-        return []
-
     def generate(self, dstbasedir):
         raise NotImplemented()
 
@@ -265,32 +256,22 @@ class PageBase:
     def __repr__(self):
         return f"PageBase({self.srcfile})"
 
-class PageSingle(PageBase):
-    def __init__(self, basedir, srcpath, dstpath):
-        super(PageSingle,self).__init__(basedir, srcpath)
-        self.dstpath = dstpath or srcpath
+class PageFile(PageBase):
+    def __init__(self, basepath, srcpath):
+        super().__init__(basepath, srcpath)
+        self.dstpath = srcpath
 
     def generate(self, dstbasedir):
         df = dstbasedir.joinpath(self.dstpath)
         makedirs(df.parent)
-        self._write(df)
+        shutil.copy(self.srcfile, df)
 
     def dstpaths(self):
         return [self.dstpath]
 
-    def _write(self, dstfile):
-        raise NotImplemented()
-
-class PageFile(PageSingle):
-    def __init__(self, basepath, srcpath):
-        super(PageFile, self).__init__(basepath, srcpath, dstpath=srcpath)
-
-    def _write(self, dstfile):
-        shutil.copy(self.srcfile, dstfile)
-
 class PageTemplated(PageBase):
     def __init__(self, basedir, srcpath, template_engine, default_template):
-        super(PageTemplated, self).__init__(basedir, srcpath)
+        super().__init__(basedir, srcpath)
         self.dstpath = srcpath.with_suffix('.html')
         self.depth = len(self.dstpath.parts)-1
         self.root = '/'.join(['..'] * (self.depth)) if self.depth>0 else '.'
@@ -344,20 +325,20 @@ class PageTemplated(PageBase):
 
 class PageMarkdown(PageTemplated):
     def __init__(self, basedir, srcpath, template_engine):
-        super(PageMarkdown, self).__init__(basedir, srcpath, template_engine, MARKDOWN_TEMPLATE)
+        super().__init__(basedir, srcpath, template_engine, MARKDOWN_TEMPLATE)
         self.dstpathdocx = self.dstpath.with_suffix('.docx')
 
     def generate(self, dstbasedir):
         dstfile = dstbasedir.joinpath(self.dstpath)
         makedirs(dstfile.parent)
 
+        pantable = ['-F', 'pantable']
+
         with report_exceptions():
             source =  open(self.srcfile, 'r').read()
             metadata, offset, content = load_metadata(source)
-            extra_args=['--mathjax',
-                        '--data-dir='+os.path.abspath(os.path.dirname(__file__)),
-                        '--template=vars',                 # TODO delete vars templating
-                        '--toc']
+            extra_args=['-s', '--mathjax', '--data-dir='+os.path.abspath(os.path.dirname(__file__))] + pantable
+            
             if 'bibliography' in metadata:
                 bib = self.srcfile.parent.joinpath(metadata['bibliography']).resolve()
                 extra_args.append(f'--bibliography={bib}')
@@ -366,17 +347,17 @@ class PageMarkdown(PageTemplated):
                 extra_args.append('--csl='+csl)
 
             s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.parent)
+            s = s.decode(PAGE_ENCODING)
             if not s.strip() or error:
                 title = 'ERROR'
                 toc = ''
-                body = f'<pre>{error.decode(PAGE_ENCODING)}</pre>'
+                body = f'<pre>{error.decode(PAGE_ENCODING)}</pre><div>{s}</div>'
             else:
-                title_, toc_, body = s.decode(PAGE_ENCODING).split('<><><><>')
-                title, toc = generate_title_toc(body)
+                title, toc = generate_title_toc(s)
+                body = pq(s)('body').html()
                 body = body.replace('[TOC]', toc)
 
-            if title:
-                metadata['title'] = title
+            metadata['title'] = title
             metadata['toc'] = toc
             metadata['offset'] = offset
             metadata['source'] = source
@@ -390,7 +371,7 @@ class PageMarkdown(PageTemplated):
                                                'markdown',
                                                self.dstbasedir.joinpath(self.dstpathdocx).resolve(),
                                                'docx',
-                                               extra_args=[f"--reference-docx={refer}"],
+                                               extra_args=[f"--reference-docx={refer}"]+pantable,
                                                cwd=self.srcfile.parent)
                 if error:
                     log(error)
@@ -403,7 +384,7 @@ class PageMarkdown(PageTemplated):
 
 class PageAsciidoc(PageTemplated):
     def __init__(self, basedir, srcpath, template_engine):
-        super(PageAsciidoc, self).__init__(basedir, srcpath, template_engine, ASCIIDOC_TEMPLATE)
+        super().__init__(basedir, srcpath, template_engine, ASCIIDOC_TEMPLATE)
 
     def generate(self, dstbasedir):
         dstfile = dstbasedir.joinpath(self.dstpath)
@@ -422,12 +403,12 @@ class PageAsciidoc(PageTemplated):
             else:
                 title, toc = generate_title_toc(s)
                 body = pq(s)('body').html()
-                body = body.replace(':toc:', toc)
+                body = body.replace('[TOC]', toc)
                 #body = toc + body
 
-            if title:
-                metadata['title'] = title
+            metadata['title'] = title
             metadata['toc'] = toc
+            metadata['source'] = source
 
             with open(dstfile, 'wb') as f:
                 f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
@@ -435,90 +416,70 @@ class PageAsciidoc(PageTemplated):
             if error:
                 log(error)
 
+def sitegen(srcdir, dstdir, templatedir=None):
+    srcdir = Path(srcdir)
+    dstdir = Path(dstdir)
+    template_engine = TemplateEngine(templatedir)
+    pages = []
 
-class Site:
-    """
-        Site generate a list of pages from basedir
-    """
-    def __init__(self, basedir, template_engine):
-        self.basedir = Path(basedir)
-        self.template_engine = template_engine
-        self.pages = []
+    dstpaths = []
+    for srcpath in all_files(srcdir, IGNORE_LIST):
+        suffix = srcpath.suffix
 
-        #log('Loading source files...')
+        with report_exceptions():
+            if suffix in ['.md', '.markdown']:
+                page = PageMarkdown(srcdir, srcpath, template_engine)
+            elif suffix in ['.adoc', '.asc', '.asciidoc']:
+                page = PageAsciidoc(srcdir, srcpath, template_engine)
+            else:
+                page = PageFile(srcdir, srcpath)
 
-        dstpaths = []
+            for d in page.dstpaths():
+                if d in dstpaths:
+                    log(f'WARNING: destination file overlapped: {d} from {page.srcpath}')
+                dstpaths.append(d)
 
-        for srcpath in all_files(basedir, IGNORE_LIST):
-            suffix = srcpath.suffix
+            pages.append(page)
 
-            with report_exceptions():
-                if suffix in ['.md', '.markdown']:
-                    page = PageMarkdown(basedir, srcpath, template_engine)
-                elif suffix in ['.adoc', '.asc', '.asciidoc']:
-                    page = PageAsciidoc(basedir, srcpath, template_engine)
-                else:
-                    page = PageFile(basedir, srcpath)
+    log(f'Loaded {len(pages)} files')
 
-                for d in page.dstpaths():
-                    if d in dstpaths:
-                        log(f'WARNING: destination file overlapped: {d} from {page.srcpath}')
-                    dstpaths.append(d)
+    makedirs(dstdir)
+    current_dst = set(all_files(dstdir))
+    next_dst = {d for page in pages for d in page.dstpaths()}
+    deleted_dst = current_dst - next_dst
 
-                self.pages.append(page)
+    if len(deleted_dst) > 0:
+        log(f'delete {len(deleted_dst)} abandoned files from destination directory')
+        for f in deleted_dst:
+            log(f'delete {f}')
+            remove(f)
 
-        log(f'Loaded {len(self.pages)} files')
+    tl = template_engine.lastmodified()
 
-    def __iter__(self):
-        for p in self.pages:
-            yield p
+    for page in pages:
+        src = page.srcfile
+        sm = max(src.stat().st_mtime, tl)
 
+        update = False
+        for dst in page.dstpaths():
+            dst = dstdir.joinpath(dst)
 
-class SiteGenerator:
-    def __init__(self, srcdir, dstdir, templatedir=None):
-        #self.dependencies = []
-        self.dstdir = Path(dstdir)
-        self.template_engine = TemplateEngine(templatedir)
-        self.site = Site(srcdir, self.template_engine)
+            if dst.exists() and (dst.stat().st_mtime > sm):
+                pass
+            else:
+                update = True
 
-    def generate(self):
-        makedirs(self.dstdir)
-        current_dst = set(all_files(self.dstdir))
-        next_dst = {d for page in self.site for d in page.dstpaths()}
-        deleted_dst = current_dst - next_dst
-
-        if len(deleted_dst) > 0:
-            log(f'delete {len(deleted_dst)} abandoned files from destination directory')
-            for f in deleted_dst:
-                log(f'delete {f}')
-                remove(f)
-
-        tl = self.template_engine.lastmodified()
-
-        for page in self.site:
-            src = page.srcfile
-            sm = max(src.stat().st_mtime, tl)
-
-            update = False
-            for dst in page.dstpaths():
-                dst = self.dstdir.joinpath(dst)
-
-                if dst.exists() and (dst.stat().st_mtime > sm):
-                    pass
-                else:
-                    update = True
-
-            if update:
-                log(f'generating {page.url}...')
-                try:
-                    page.generate(self.dstdir)
-                except KeyboardInterrupt:
-                    log('Keyboard interrupted.')
-                    return
-                except:
-                    remove(dst)
-                    log('error while generating {page.url}')
-                    print_exception_traceback()
+        if update:
+            log(f'generating {page.url}...')
+            try:
+                page.generate(dstdir)
+            except KeyboardInterrupt:
+                log('Keyboard interrupted.')
+                return
+            except:
+                remove(dst)
+                log('error while generating {page.url}')
+                print_exception_traceback()
 
 
 def main():
@@ -537,5 +498,4 @@ def main():
         parser.error('no input directory')
         return
 
-    sg = SiteGenerator(inputdir, outputdir, args.templatedir)
-    sg.generate()
+    sitegen(inputdir, outputdir, args.templatedir)
