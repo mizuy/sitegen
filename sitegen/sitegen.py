@@ -13,7 +13,6 @@ from jinja2.exceptions import TemplateSyntaxError
 from pathlib import Path
 from pyquery import PyQuery as pq
 
-
 DEBUG = False
 PAGE_ENCODING = 'UTF-8'
 DEFAULT_TEMPLATE = 'default.j2.html'
@@ -22,6 +21,7 @@ ASCIIDOC_TEMPLATE = 'asciidoc.j2.html'
 DOCX_TEMPLATE = 'reference.docx'
 IGNORE_LIST = ['.', '.*','_', '*~', '#*#'] # TODO load ignore file
 GENERATE_DOCX = False
+PANTABLE = shutil.which('pantable')
 
 def makedirs(directory):
     if os.path.exists(directory):
@@ -46,18 +46,6 @@ def log(message):
     sys.stderr.write(f'{message}\n')
     sys.stderr.flush()
 
-def print_exception_traceback():
-    import sys
-    e, m, tb = sys.exc_info()
-    print('exception traceback:'.ljust(80, '='))
-    for tbi in traceback.format_tb(tb):
-        print(tbi)
-    print('  %s' % str(m))
-    print(''.rjust(80, '='))
-    if DEBUG:
-        import pdb
-        pdb.post_mortem(tb)
-
 @contextmanager
 def report_exceptions():
     try:
@@ -65,23 +53,21 @@ def report_exceptions():
     except KeyboardInterrupt:
         raise KeyboardInterrupt()
     except Exception:
-        print_exception_traceback()
+        import sys
+        e, m, tb = sys.exc_info()
+        print('exception traceback:'.ljust(80, '='))
+        for tbi in traceback.format_tb(tb):
+            print(tbi)
+        print('  %s' % str(m))
+        print(''.rjust(80, '='))
+        if DEBUG:
+            import pdb
+            pdb.post_mortem(tb)
 
-def is_ignored(filename, ignore_list):
-    for ignore in ignore_list:
-        if any(fnmatch.fnmatch(part, ignore) for part in filename.split(os.path.sep)):
-            return False
-    return True
-
-def all_files(basedir, ignore_list=None):
-    for path, dirs, files in os.walk(basedir):
-        for file in files:
-            p = os.path.relpath(os.path.join(path, file), basedir)
-
-            if ignore_list and not is_ignored(p, ignore_list):
-                continue
-
-            yield Path(p)
+def walk_files(basedir):
+    for p in Path(basedir).glob('**/*'):
+        if p.is_file():
+            yield p
 
 def load_metadata(source):
     """
@@ -175,9 +161,10 @@ class TemplateEngine:
     def lastmodified(self):
         "return if one of the template is updated."
         lm = Path(__file__).stat().st_mtime
-        if self.templatedir:
-            lm = max(lm, max(self.templatedir.joinpath(path).stat().st_mtime for path in all_files(self.templatedir, IGNORE_LIST)))
-        return lm
+        if not self.templatedir:
+            return lm
+
+        return max(lm, max(p.stat().st_mtime for p in walk_files(self.templatedir)))
 
 class Pandoc:
     # based on https://github.com/bebraw/pypandoc/blob/master/pypandoc/pypandoc.py
@@ -244,7 +231,7 @@ class PageBase:
     def __init__(self, basedir, srcpath):
         self.basedir = Path(basedir)
         self.srcpath = Path(srcpath)
-        self.srcfile = self.basedir.joinpath(srcpath)
+        self.srcfile = basedir / srcpath
         self.url = str(self.srcpath)
 
     def generate(self, dstbasedir):
@@ -255,6 +242,23 @@ class PageBase:
 
     def __repr__(self):
         return f"PageBase({self.srcfile})"
+
+    def lastmodified(self):
+        return self.srcfile.stat().st_mtime
+
+    def need_update(self, lastmodified, dstdir):
+        """
+        return if dstination file (at basedirectory dstdir) needs update or not
+        """
+        update = False
+        ds = (dstdir / d for d in self.dstpaths())
+        for d in ds:
+            if not d.is_file():
+                update = True
+            else:
+                if d.stat().st_mtime < lastmodified:
+                    update = True
+        return update
 
 class PageFile(PageBase):
     def __init__(self, basepath, srcpath):
@@ -332,49 +336,51 @@ class PageMarkdown(PageTemplated):
         dstfile = dstbasedir.joinpath(self.dstpath)
         makedirs(dstfile.parent)
 
-        pantable = ['-F', 'pantable']
+        if PANTABLE:
+            pantable = ['-F', str(PANTABLE)]
+        else:
+            pantable = []
 
-        with report_exceptions():
-            source =  open(self.srcfile, 'r').read()
-            metadata, offset, content = load_metadata(source)
-            extra_args=['-s', '--mathjax', '--data-dir='+os.path.abspath(os.path.dirname(__file__))] + pantable
-            
-            if 'bibliography' in metadata:
-                bib = self.srcfile.parent.joinpath(metadata['bibliography']).resolve()
-                extra_args.append(f'--bibliography={bib}')
-            if 'csl' in metadata:
-                csl = metadata['csl']
-                extra_args.append('--csl='+csl)
+        source =  open(self.srcfile, 'r').read()
+        metadata, offset, content = load_metadata(source)
+        extra_args=['-s', '--mathjax', '--data-dir='+os.path.abspath(os.path.dirname(__file__))] + pantable
 
-            s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.parent)
-            s = s.decode(PAGE_ENCODING)
-            if not s.strip() or error:
-                title = 'ERROR'
-                toc = ''
-                body = f'<pre>{error.decode(PAGE_ENCODING)}</pre><div>{s}</div>'
-            else:
-                title, toc = generate_title_toc(s)
-                body = pq(s)('body').html()
-                body = body.replace('[TOC]', toc)
+        if 'bibliography' in metadata:
+            bib = self.srcfile.parent.joinpath(metadata['bibliography']).resolve()
+            extra_args.append(f'--bibliography={bib}')
+        if 'csl' in metadata:
+            csl = metadata['csl']
+            extra_args.append('--csl='+csl)
 
-            metadata['title'] = title
-            metadata['toc'] = toc
-            metadata['offset'] = offset
-            metadata['source'] = source
+        s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.parent)
+        s = s.decode(PAGE_ENCODING)
+        if not s.strip() or error:
+            title = 'ERROR'
+            toc = ''
+            body = f'<pre>{error.decode(PAGE_ENCODING)}</pre><div>{s}</div>'
+        else:
+            title, toc = generate_title_toc(s)
+            body = pq(s)('body').html()
+            body = body.replace('[TOC]', toc)
 
-            with open(dstfile, 'wb') as f:
-                f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
+        metadata['title'] = title
+        metadata['toc'] = toc
+        metadata['offset'] = offset
+        metadata['source'] = source
 
-            if GENERATE_DOCX:
-                refer = Path('reference.docx').resolve()
-                s,error = pandoc.convert_write(content.encode(PAGE_ENCODING),
-                                               'markdown',
-                                               self.dstbasedir.joinpath(self.dstpathdocx).resolve(),
-                                               'docx',
-                                               extra_args=[f"--reference-docx={refer}"]+pantable,
-                                               cwd=self.srcfile.parent)
-                if error:
-                    log(error)
+        with open(dstfile, 'wb') as f:
+            f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
+
+        if GENERATE_DOCX:
+            refer = Path('reference.docx').resolve()
+            s,error = pandoc.convert_write(content.encode(PAGE_ENCODING),
+                                           'markdown',
+                                           self.dstbasedir.joinpath(self.dstpathdocx).resolve(),
+                                           'docx',
+                                           extra_args=[f"--reference-docx={refer}"]+pantable,
+                                           cwd=self.srcfile.parent)
+            if error:
+                log(error)
 
     def dstpaths(self):
         if GENERATE_DOCX:
@@ -390,31 +396,40 @@ class PageAsciidoc(PageTemplated):
         dstfile = dstbasedir.joinpath(self.dstpath)
         makedirs(dstfile.parent)
 
-        with report_exceptions():
-            source = open(self.srcfile, 'r').read()
-            metadata = {}
+        source = open(self.srcfile, 'r').read()
+        metadata = {}
 
-            s,error = asciidoc_convert(source.encode(PAGE_ENCODING), cwd=self.srcfile.parent)
-            s = s.decode(PAGE_ENCODING)
-            if not s.strip() or error:
-                title = 'ERROR'
-                toc = ''
-                body = f'<pre>{error.decode(PAGE_ENCODING)}</pre><div>{s}</div>'
-            else:
-                title, toc = generate_title_toc(s)
-                body = pq(s)('body').html()
-                body = body.replace('[TOC]', toc)
-                #body = toc + body
+        s,error = asciidoc_convert(source.encode(PAGE_ENCODING), cwd=self.srcfile.parent)
+        s = s.decode(PAGE_ENCODING)
+        if not s.strip() or error:
+            title = 'ERROR'
+            toc = ''
+            body = f'<pre>{error.decode(PAGE_ENCODING)}</pre><div>{s}</div>'
+        else:
+            title, toc = generate_title_toc(s)
+            body = pq(s)('body').html().replace('[TOC]', toc)
 
-            metadata['title'] = title
-            metadata['toc'] = toc
-            metadata['source'] = source
+        metadata['title'] = title
+        metadata['toc'] = toc
+        metadata['source'] = source
 
-            with open(dstfile, 'wb') as f:
-                f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
+        with open(dstfile, 'wb') as f:
+            f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
 
-            if error:
-                log(error)
+        if error:
+            log(error)
+
+def is_ignored(filepath, ignore_list=IGNORE_LIST):
+    for ignore in ignore_list:
+        if any(fnmatch.fnmatch(part, ignore) for part in filepath.parts):
+            return True
+    return False
+
+def walk_site(basedir):
+    for path in walk_files(basedir):
+        if is_ignored(path):
+            continue
+        yield path.relative_to(basedir)
 
 def sitegen(srcdir, dstdir, templatedir=None):
     srcdir = Path(srcdir)
@@ -423,7 +438,7 @@ def sitegen(srcdir, dstdir, templatedir=None):
     pages = []
 
     dstpaths = []
-    for srcpath in all_files(srcdir, IGNORE_LIST):
+    for srcpath in walk_site(srcdir):
         suffix = srcpath.suffix
 
         with report_exceptions():
@@ -444,7 +459,7 @@ def sitegen(srcdir, dstdir, templatedir=None):
     log(f'Loaded {len(pages)} files')
 
     makedirs(dstdir)
-    current_dst = set(all_files(dstdir))
+    current_dst = set(walk_site(dstdir))
     next_dst = {d for page in pages for d in page.dstpaths()}
     deleted_dst = current_dst - next_dst
 
@@ -457,29 +472,11 @@ def sitegen(srcdir, dstdir, templatedir=None):
     tl = template_engine.lastmodified()
 
     for page in pages:
-        src = page.srcfile
-        sm = max(src.stat().st_mtime, tl)
-
-        update = False
-        for dst in page.dstpaths():
-            dst = dstdir.joinpath(dst)
-
-            if dst.exists() and (dst.stat().st_mtime > sm):
-                pass
-            else:
-                update = True
-
-        if update:
+        sm = max(page.lastmodified(), tl)
+        if page.need_update(sm, dstdir):
             log(f'generating {page.url}...')
-            try:
+            with report_exceptions():
                 page.generate(dstdir)
-            except KeyboardInterrupt:
-                log('Keyboard interrupted.')
-                return
-            except:
-                remove(dst)
-                log('error while generating {page.url}')
-                print_exception_traceback()
 
 
 def main():
