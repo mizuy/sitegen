@@ -1,0 +1,58 @@
+{% extends "base.j2.html" %}
+
+{% block contents %}
+{{ contents }}
+<h1>全文検索</h1>
+<input type="text" id="q" onkeyup="do_find(this.value)" autocomplete="off" placeholder="サイト内を検索"></input>
+<p><span id="stat">0</span>件見つかりました。</p>
+<div id="result"></div>
+{% endblock contents %}
+
+{% block scripts %}
+<script type="text/javascript" async src="index.js"></script>
+<script type="text/javascript">
+RegExp.escape= function(s) {
+    return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+};
+window.onload=function(){
+	document.getElementById("q").focus();
+}
+
+var MAX_RESULTS = 50;
+
+function do_find(query){
+	if(!query || query.length<2){return}
+	if(this.lastquery == query){return}
+	this.lastquery = query;
+
+    var reg = new RegExp(RegExp.escape(query), "i");
+	var result = [];
+    var length = data.length
+	for(var i=0; i<length; i++){
+        var d = data[i]
+		var r = reg.exec(data[i].content);
+		if(r){
+            result.push([i,r.index,r[0].length]);
+        }
+	}
+
+	var buf = ["<dl>"];
+    var length = Math.min(result.length, MAX_RESULTS); 
+	for(var i=0; i<length;i++){
+		var d = data[result[i][0]];
+		var idx = result[i][1];
+		var len = result[i][2];
+		buf.push(
+			"<dt><a href='",d.url,"'>",d.title,"</a></dt>",
+			"<dd>",d.content.substring(Math.max(0,idx-40),idx),
+		    "<b>",d.content.substring(idx,idx+len),"</b>",
+		    d.content.substring(idx+len,idx+len+80),"</dd>"
+		);
+	}
+    buf.push("</dl>")
+
+	document.getElementById("stat").innerHTML = result.length;
+	document.getElementById("result").innerHTML = buf.join("");
+}
+</script>
+{% endblock scripts %}

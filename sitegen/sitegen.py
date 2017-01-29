@@ -18,10 +18,20 @@ PAGE_ENCODING = 'UTF-8'
 DEFAULT_TEMPLATE = 'default.j2.html'
 MARKDOWN_TEMPLATE = 'markdown.j2.html'
 ASCIIDOC_TEMPLATE = 'asciidoc.j2.html'
+CONFIG_YAML = 'config.yaml'
 DOCX_TEMPLATE = 'reference.docx'
 IGNORE_LIST = ['.', '.*','_', '*~', '#*#'] # TODO load ignore file
 GENERATE_DOCX = False
 PANTABLE = shutil.which('pantable')
+
+# TODO
+def load_config(config_yaml=CONFIG_YAML):
+    try:
+        y = yaml.load(open(config_yaml).read())
+    except:
+        log('failed to load {config_yaml}')
+        return {}
+    return y
 
 def makedirs(directory):
     if os.path.exists(directory):
@@ -69,45 +79,6 @@ def walk_files(basedir):
         if p.is_file():
             yield p
 
-def load_metadata(source):
-    """
-    split file contents into metadata and remaining contents
-
-    metadata is yaml formatted data at head tagged by two '---' lines
-
-        ---
-        yaml formatted metadata
-        ---
-        contents
-    """
-    SPLIT = r'^---+\s*'
-    metadata = {}
-    line_offset = 0
-    content = source
-
-    i = 0
-    lines = source.splitlines()
-
-    while i < len(lines):
-        if not lines[i].strip():
-            i += 1
-            continue
-        if re.match(SPLIT, lines[i]):
-            i += 1
-            yaml_start = i
-            while i < len(lines):
-                if re.match(SPLIT, lines[i]):
-                    yaml_end = i
-                    i += 1
-                    break
-                i += 1
-            metadata = yaml.load('\n'.join(lines[yaml_start:yaml_end])) or metadata
-            line_offset = yaml_end+1
-            content = '\n'.join(lines[line_offset:])
-        else:
-            break
-    return metadata, line_offset, content
-
 def generate_title_toc(body):
     q = pq(body)
     title = q('title').text()
@@ -147,9 +118,6 @@ class TemplateEngine:
 
         self.env = Environment(loader=loader)
 
-    def get_template(self, name):
-        return self.env.get_template(name)
-
     def render(self, template, metadata):
         try:
             t = self.env.get_template(template)
@@ -158,12 +126,12 @@ class TemplateEngine:
         except TemplateSyntaxError as e:
             raise Exception(f"{e.filename}:{e.lineno}: {e.name}, {e.message}")
 
+    @property
     def lastmodified(self):
         "return if one of the template is updated."
         lm = Path(__file__).stat().st_mtime
         if not self.templatedir:
             return lm
-
         return max(lm, max(p.stat().st_mtime for p in walk_files(self.templatedir)))
 
 class Pandoc:
@@ -231,27 +199,24 @@ class PageBase:
     def __init__(self, basedir, srcpath):
         self.basedir = Path(basedir)
         self.srcpath = Path(srcpath)
+        self.dstpath = self.srcpath
         self.srcfile = basedir / srcpath
-        self.url = str(self.srcpath)
+        self.url = str(self.dstpath)
+        self.depth = len(self.dstpath.parts)-1
+        self.root = '/'.join(['..'] * (self.depth)) if self.depth>0 else '.'
 
     def generate(self, dstbasedir):
         raise NotImplemented()
 
-    def dstpaths(self):
-        raise NotImplemented()
-
     def __repr__(self):
         return f"PageBase({self.srcfile})"
-
-    def lastmodified(self):
-        return self.srcfile.stat().st_mtime
 
     def need_update(self, lastmodified, dstdir):
         """
         return if dstination file (at basedirectory dstdir) needs update or not
         """
         update = False
-        ds = (dstdir / d for d in self.dstpaths())
+        ds = (dstdir / d for d in self.dstpaths)
         for d in ds:
             if not d.is_file():
                 update = True
@@ -260,25 +225,32 @@ class PageBase:
                     update = True
         return update
 
+    @property
+    def lastmodified(self):
+        return self.srcfile.stat().st_mtime
+    @property
+    def dstpaths(self):
+        return [self.dstpath]
+
+    @property
+    def search_json(self):
+        return None
+        return {'url': self.url, 'title': self.srcpath.stem, 'content': ''}
+
 class PageFile(PageBase):
     def __init__(self, basepath, srcpath):
         super().__init__(basepath, srcpath)
-        self.dstpath = srcpath
 
     def generate(self, dstbasedir):
         df = dstbasedir.joinpath(self.dstpath)
         makedirs(df.parent)
         shutil.copy(self.srcfile, df)
 
-    def dstpaths(self):
-        return [self.dstpath]
-
 class PageTemplated(PageBase):
     def __init__(self, basedir, srcpath, template_engine, default_template):
         super().__init__(basedir, srcpath)
         self.dstpath = srcpath.with_suffix('.html')
-        self.depth = len(self.dstpath.parts)-1
-        self.root = '/'.join(['..'] * (self.depth)) if self.depth>0 else '.'
+        self.url = str(self.dstpath)
         self.template_engine = template_engine
         self.default_template = default_template
 
@@ -304,7 +276,6 @@ class PageTemplated(PageBase):
 
         """
 
-        self.depth = len(self.dstpath.parts)-1
         names = ['Index'] + list(self.dstpath.with_suffix('').parts)
         self.parts = []
         for i, name in enumerate(names):
@@ -312,9 +283,6 @@ class PageTemplated(PageBase):
                 break
             link = '/'.join(['..']*(self.depth-i)) + '/index.html'
             self.parts.append((link, name))
-
-    def dstpaths(self):
-        return [self.dstpath]
 
     def render_template(self, contents, metadata={}):
         metadata['contents'] = contents
@@ -327,10 +295,27 @@ class PageTemplated(PageBase):
         template = metadata.get('template') or self.default_template
         return self.template_engine.render(template, metadata)
 
+R_M = re.compile(r'\A\s*^---+\s*$(.*?)^---+\s*$(.*)\Z', re.M|re.DOTALL)
+def load_metadata(source):
+    m = R_M.match(source)
+    if m:
+        return yaml.load(m[1]) or {}, m[2]
+    else:
+        return {}, source
+
 class PageMarkdown(PageTemplated):
     def __init__(self, basedir, srcpath, template_engine):
         super().__init__(basedir, srcpath, template_engine, MARKDOWN_TEMPLATE)
         self.dstpathdocx = self.dstpath.with_suffix('.docx')
+
+    @property
+    def search_json(self):
+        source = open(self.srcfile, 'r').read()
+        metadata, content = load_metadata(source)
+        content = re.sub(r'\s+',' ',content)
+        return {'url': self.url,
+                'title': self.srcpath.stem,
+                'content': self.srcpath.stem+' '+content}
 
     def generate(self, dstbasedir):
         dstfile = dstbasedir.joinpath(self.dstpath)
@@ -341,9 +326,9 @@ class PageMarkdown(PageTemplated):
         else:
             pantable = []
 
-        source =  open(self.srcfile, 'r').read()
-        metadata, offset, content = load_metadata(source)
-        extra_args=['-s', '--mathjax', '--data-dir='+os.path.abspath(os.path.dirname(__file__))] + pantable
+        source = open(self.srcfile, 'r').read()
+        metadata, content = load_metadata(source)
+        extra_args=['-s', '--mathjax'] + pantable
 
         if 'bibliography' in metadata:
             bib = self.srcfile.parent.joinpath(metadata['bibliography']).resolve()
@@ -365,7 +350,6 @@ class PageMarkdown(PageTemplated):
 
         metadata['title'] = title
         metadata['toc'] = toc
-        metadata['offset'] = offset
         metadata['source'] = source
 
         with open(dstfile, 'wb') as f:
@@ -382,6 +366,7 @@ class PageMarkdown(PageTemplated):
             if error:
                 log(error)
 
+    @property
     def dstpaths(self):
         if GENERATE_DOCX:
             return [self.dstpath, self.dstpathdocx]
@@ -431,11 +416,13 @@ def walk_site(basedir):
             continue
         yield path.relative_to(basedir)
 
-def sitegen(srcdir, dstdir, templatedir=None):
+def sitegen(srcdir, dstdir, templatedir=None, indexupdate=None):
     srcdir = Path(srcdir)
     dstdir = Path(dstdir)
     template_engine = TemplateEngine(templatedir)
     pages = []
+
+    searchindex = dstdir/'index.js'
 
     dstpaths = []
     for srcpath in walk_site(srcdir):
@@ -449,7 +436,7 @@ def sitegen(srcdir, dstdir, templatedir=None):
             else:
                 page = PageFile(srcdir, srcpath)
 
-            for d in page.dstpaths():
+            for d in page.dstpaths:
                 if d in dstpaths:
                     log(f'WARNING: destination file overlapped: {d} from {page.srcpath}')
                 dstpaths.append(d)
@@ -460,7 +447,8 @@ def sitegen(srcdir, dstdir, templatedir=None):
 
     makedirs(dstdir)
     current_dst = set(walk_site(dstdir))
-    next_dst = {d for page in pages for d in page.dstpaths()}
+    next_dst = {d for page in pages for d in page.dstpaths}
+    next_dst.add(searchindex)
     deleted_dst = current_dst - next_dst
 
     if len(deleted_dst) > 0:
@@ -469,15 +457,22 @@ def sitegen(srcdir, dstdir, templatedir=None):
             log(f'delete {f}')
             remove(f)
 
-    tl = template_engine.lastmodified()
+    tl = template_engine.lastmodified
 
     for page in pages:
-        sm = max(page.lastmodified(), tl)
+        sm = max(page.lastmodified, tl)
         if page.need_update(sm, dstdir):
             log(f'generating {page.url}...')
             with report_exceptions():
                 page.generate(dstdir)
 
+    if indexupdate:
+        open(searchindex,'w').write(search_index(pages))
+
+def search_index(pages):
+    import json
+    jj = [page.search_json for page in pages if page.search_json]
+    return f"var data={json.dumps(jj)}"
 
 def main():
     from argparse import ArgumentParser
@@ -485,6 +480,7 @@ def main():
     parser.add_argument("inputdir", help="input directory")
     parser.add_argument("-o", "--output", dest="outputdir", help="output directory", default="_output")
     parser.add_argument("-t", "--template", dest="templatedir", help="template directory", default=None)
+    parser.add_argument("-i", dest="index_update",action='store_true', help="update search index")
 
     args = parser.parse_args()
 
@@ -495,4 +491,4 @@ def main():
         parser.error('no input directory')
         return
 
-    sitegen(inputdir, outputdir, args.templatedir)
+    sitegen(inputdir, outputdir, args.templatedir, args.index_update)

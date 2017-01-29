@@ -9,8 +9,7 @@
 <script type="text/x-mathjax-config">
   MathJax.Hub.Config({tex2jax: {inlineMath: [['$','$'], ['\\(','\\)']]}});
 </script>
-<script type="text/javascript" async src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS_CHTML">
-</script>
+<script type="text/javascript" async src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS_CHTML"></script>
 </head>
 
 <body>
@@ -29,6 +28,6 @@
   <p class="text-muted">(C) 2016 mizuy, gnerated by <a href="https://github.com/mizuy/sitegen">sitegen</a>, Python, pandoc, asciidoc, w3.css.</p>
   </footer>
 </div>
-
+{% block scripts %}{{ scripts }}{% endblock scripts %}
 </body>
 </html>
