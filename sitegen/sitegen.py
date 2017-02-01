@@ -24,15 +24,6 @@ IGNORE_LIST = ['.', '.*','_', '*~', '#*#'] # TODO load ignore file
 GENERATE_DOCX = False
 PANTABLE = shutil.which('pantable')
 
-# TODO
-def load_config(config_yaml=CONFIG_YAML):
-    try:
-        y = yaml.load(open(config_yaml).read())
-    except:
-        log('failed to load {config_yaml}')
-        return {}
-    return y
-
 def makedirs(directory):
     if os.path.exists(directory):
         return
@@ -103,7 +94,6 @@ def generate_title_toc(body):
         pp.append(f'<li><a href="#{aname}">{tag.text()}</a></li>')
 
     return title, out.wrap('<div id="toc"></div>').html()
-
 
 class TemplateEngine:
     def __init__(self, templatedir=None):
@@ -258,31 +248,47 @@ class PageTemplated(PageBase):
         parts = [(link, name)]
 
         ex.
-        a/b/c.html
-        (../../index.html, Index) 0
-        (../index.html, a) 1
-        (./index.html, b) 2
+        a/b/c.html (dd=3)
+        (../../../index.html, Index) 0
+        (../../index.html, a) 1
+        (../index.html, b) 2
         (., c) 3
 
         ex.
-        a/b/index.html
-        (../../index.html, Index) 0
-        (../index.html, a) 1
-        (./index.html, b) 2
+        a/b/index.html (dd=3)
+        (../../../index.html, Index) 0
+        (../../index.html, a) 1
+        (../index.html, b) 2
+        (., b) 3
 
-        ex.
-        index.html
+        a/b.html (dd=2)
+        (../index.html, Index) 0
+        (./index.html, a) 1
+        (., b) 2
+
+        a.html (dd=1)
         (./index.html, Index) 0
+        (., a)
+
+        index.html (dd=1)
+        (., Index) 0
 
         """
 
-        names = ['Index'] + list(self.dstpath.with_suffix('').parts)
-        self.parts = []
-        for i, name in enumerate(names):
-            if name=='index':
-                break
-            link = '/'.join(['..']*(self.depth-i)) + '/index.html'
-            self.parts.append((link, name))
+        def rel_parent(n):
+            if n==0:
+                return '.'
+            elif n==1:
+                return './index.html'
+            else:
+                return '../'*(n-1)+'index.html'
+
+        pp = list(self.dstpath.with_suffix('').parts)
+        dd = len(pp)
+        names = ['Home'] + pp
+        if names[-1]=='index':
+            names.pop()
+        self.parts = [(rel_parent(dd-i), name) for i,name in enumerate(names)]
 
     def render_template(self, contents, metadata={}):
         metadata['contents'] = contents
@@ -303,10 +309,30 @@ def load_metadata(source):
     else:
         return {}, source
 
+class ConfigYaml:
+    def __init__(self, metadata, path):
+        self.metadata = metadata
+        self.path = path
+
+    def get_path(self, name):
+        a = self.metadata.get(name)
+        if not a:
+            return None
+        return self.path.parent.joinpath(a).resolve()
+
+    @classmethod
+    def from_file(cls, path):
+        try:
+            m = yml.load(open(path).read())
+            return ConfigYaml(m, path)
+        except:
+            return ConfigYaml({}, Path('.'))
+
 class PageMarkdown(PageTemplated):
-    def __init__(self, basedir, srcpath, template_engine):
+    def __init__(self, basedir, srcpath, template_engine, global_config):
         super().__init__(basedir, srcpath, template_engine, MARKDOWN_TEMPLATE)
         self.dstpathdocx = self.dstpath.with_suffix('.docx')
+        self.gy = global_config
 
     @property
     def search_json(self):
@@ -330,12 +356,11 @@ class PageMarkdown(PageTemplated):
         metadata, content = load_metadata(source)
         extra_args=['-s', '--mathjax'] + pantable
 
-        if 'bibliography' in metadata:
-            bib = self.srcfile.parent.joinpath(metadata['bibliography']).resolve()
-            extra_args.append(f'--bibliography={bib}')
-        if 'csl' in metadata:
-            csl = metadata['csl']
-            extra_args.append('--csl='+csl)
+        y = ConfigYaml(metadata, self.srcpath)
+        for pp in ['bibliography', 'csl']:
+            t = y.get_path(pp) or self.gy.get_path(pp)
+            if t:
+                extra_args.append(f'--{pp}={t}')
 
         s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.parent)
         s = s.decode(PAGE_ENCODING)
@@ -422,7 +447,10 @@ def sitegen(srcdir, dstdir, templatedir=None, indexupdate=None):
     template_engine = TemplateEngine(templatedir)
     pages = []
 
-    searchindex = dstdir/'index.js'
+    gy = ConfigYaml.from_file(CONFIG_YAML)
+
+    searchindex_path = 'searchindex.js'
+    searchindex_update = False
 
     dstpaths = []
     for srcpath in walk_site(srcdir):
@@ -430,7 +458,7 @@ def sitegen(srcdir, dstdir, templatedir=None, indexupdate=None):
 
         with report_exceptions():
             if suffix in ['.md', '.markdown']:
-                page = PageMarkdown(srcdir, srcpath, template_engine)
+                page = PageMarkdown(srcdir, srcpath, template_engine, gy)
             elif suffix in ['.adoc', '.asc', '.asciidoc']:
                 page = PageAsciidoc(srcdir, srcpath, template_engine)
             else:
@@ -447,8 +475,7 @@ def sitegen(srcdir, dstdir, templatedir=None, indexupdate=None):
 
     makedirs(dstdir)
     current_dst = set(walk_site(dstdir))
-    next_dst = {d for page in pages for d in page.dstpaths}
-    next_dst.add(searchindex)
+    next_dst = {Path(searchindex_path)}|{d for page in pages for d in page.dstpaths}
     deleted_dst = current_dst - next_dst
 
     if len(deleted_dst) > 0:
@@ -456,6 +483,7 @@ def sitegen(srcdir, dstdir, templatedir=None, indexupdate=None):
         for f in deleted_dst:
             log(f'delete {f}')
             remove(f)
+        searchindex_update = True
 
     tl = template_engine.lastmodified
 
@@ -465,9 +493,11 @@ def sitegen(srcdir, dstdir, templatedir=None, indexupdate=None):
             log(f'generating {page.url}...')
             with report_exceptions():
                 page.generate(dstdir)
+            searchindex_update = True
 
-    if indexupdate:
-        open(searchindex,'w').write(search_index(pages))
+    if indexupdate and searchindex_update:
+        log(f'making search index: {searchindex_path}')
+        open(dstdir/searchindex_path,'w').write(search_index(pages))
 
 def search_index(pages):
     import json

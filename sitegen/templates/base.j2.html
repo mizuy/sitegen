@@ -13,7 +13,14 @@
 </head>
 
 <body>
-
+<nav>
+  <a href="{{root}}/index.html">{{sitename}}</a>
+  <ul>
+{% for link, name in parts %}
+    <li><a href="{{link}}">{{name}}</a></li>
+{% endfor %}
+  </ul>
+</nav>
 <div class="w3-main">
   <header class="w3-container w3-theme w3-padding-32">
     <a href="{{root}}/index.html">{{sitename}}</a>

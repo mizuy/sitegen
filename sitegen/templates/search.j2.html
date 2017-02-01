@@ -9,19 +9,18 @@
 {% endblock contents %}
 
 {% block scripts %}
-<script type="text/javascript" async src="index.js"></script>
+<script type="text/javascript" async src="searchindex.js"></script>
 <script type="text/javascript">
 RegExp.escape= function(s) {
     return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 };
-window.onload=function(){
-	document.getElementById("q").focus();
-}
+
+//window.onload=function(){	document.getElementById("q").focus();  }
 
 var MAX_RESULTS = 50;
 
 function do_find(query){
-	if(!query || query.length<2){return}
+	if(!query || query.length<3){return}
 	if(this.lastquery == query){return}
 	this.lastquery = query;
 

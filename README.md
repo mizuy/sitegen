@@ -55,8 +55,9 @@ Please put your .csl file into ~/.csl/
 ## TODO
 
 - word search by javascript -> ok
+    - in file search text highlight
+- global option file -> ok
 - listing files not referenced by index.md
 - own pandoc filter
-- global option file
 - jQuery One Page Navigation Plugin?
 - multithread
