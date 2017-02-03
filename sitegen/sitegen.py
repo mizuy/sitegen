@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 
 # Static Site Generator powered by markdown and jinja2
-# Copyright (c) 2012-2016 MIZUGUCHI Yasuhiko
+# Copyright (c) 2012-2017 MIZUGUCHI Yasuhiko
 # based on http://obraz.pirx.ru/
 # install requirements: Jinja2, PyYAML, pyquery, pandoc(from cabal), asciidoctor
 
 import sys, os, io, re, traceback, errno, subprocess
-import shutil, fnmatch, yaml
+import shutil, fnmatch, yaml, concurrent.futures
 from contextlib import contextmanager
 from jinja2 import Environment, FileSystemLoader, ChoiceLoader, PackageLoader
 from jinja2.exceptions import TemplateSyntaxError
@@ -34,14 +34,10 @@ def makedirs(directory):
             pass
 
 def remove(path):
-    try:
-        if os.path.isdir(path):
-            shutil.rmtree(path)
-        else:
-            os.remove(path)
-    except OSError as e:
-        if e.errno == errno.EEXIST:
-            pass
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
 
 def log(message):
     sys.stderr.write(f'{message}\n')
@@ -111,7 +107,6 @@ class TemplateEngine:
     def render(self, template, metadata):
         try:
             t = self.env.get_template(template)
-            # env.from_string()
             return t.render(**metadata)
         except TemplateSyntaxError as e:
             raise Exception(f"{e.filename}:{e.lineno}: {e.name}, {e.message}")
@@ -344,16 +339,10 @@ class PageMarkdown(PageTemplated):
                 'content': self.srcpath.stem+' '+content}
 
     def generate(self, dstbasedir):
-        dstfile = dstbasedir.joinpath(self.dstpath)
-        makedirs(dstfile.parent)
-
-        if PANTABLE:
-            pantable = ['-F', str(PANTABLE)]
-        else:
-            pantable = []
-
         source = open(self.srcfile, 'r').read()
         metadata, content = load_metadata(source)
+
+        pantable = ['-F', str(PANTABLE)] if PANTABLE else []
         extra_args=['-s', '--mathjax'] + pantable
 
         y = ConfigYaml(metadata, self.srcpath)
@@ -377,6 +366,8 @@ class PageMarkdown(PageTemplated):
         metadata['toc'] = toc
         metadata['source'] = source
 
+        dstfile = dstbasedir.joinpath(self.dstpath)
+        makedirs(dstfile.parent)
         with open(dstfile, 'wb') as f:
             f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
 
@@ -441,68 +432,75 @@ def walk_site(basedir):
             continue
         yield path.relative_to(basedir)
 
-def sitegen(srcdir, dstdir, templatedir=None, indexupdate=None):
-    srcdir = Path(srcdir)
-    dstdir = Path(dstdir)
-    template_engine = TemplateEngine(templatedir)
-    pages = []
+class Site:
+    def __init__(self, srcdir, templatedir=None):
+        self.srcdir = Path(srcdir)
+        self.template_engine = TemplateEngine(templatedir)
+        self.pages = []
+        self.config = ConfigYaml.from_file(CONFIG_YAML)
 
-    gy = ConfigYaml.from_file(CONFIG_YAML)
+        dstpaths = []
+        for srcpath in walk_site(srcdir):
+            suffix = srcpath.suffix
 
-    searchindex_path = 'searchindex.js'
-    searchindex_update = False
-
-    dstpaths = []
-    for srcpath in walk_site(srcdir):
-        suffix = srcpath.suffix
-
-        with report_exceptions():
-            if suffix in ['.md', '.markdown']:
-                page = PageMarkdown(srcdir, srcpath, template_engine, gy)
-            elif suffix in ['.adoc', '.asc', '.asciidoc']:
-                page = PageAsciidoc(srcdir, srcpath, template_engine)
-            else:
-                page = PageFile(srcdir, srcpath)
-
-            for d in page.dstpaths:
-                if d in dstpaths:
-                    log(f'WARNING: destination file overlapped: {d} from {page.srcpath}')
-                dstpaths.append(d)
-
-            pages.append(page)
-
-    log(f'Loaded {len(pages)} files')
-
-    makedirs(dstdir)
-    current_dst = set(walk_site(dstdir))
-    next_dst = {Path(searchindex_path)}|{d for page in pages for d in page.dstpaths}
-    deleted_dst = current_dst - next_dst
-
-    if len(deleted_dst) > 0:
-        log(f'delete {len(deleted_dst)} abandoned files from destination directory')
-        for f in deleted_dst:
-            log(f'delete {f}')
-            remove(f)
-        searchindex_update = True
-
-    tl = template_engine.lastmodified
-
-    for page in pages:
-        sm = max(page.lastmodified, tl)
-        if page.need_update(sm, dstdir):
-            log(f'generating {page.url}...')
             with report_exceptions():
-                page.generate(dstdir)
+                if suffix in ['.md', '.markdown']:
+                    page = PageMarkdown(srcdir, srcpath, self.template_engine, self.config)
+                elif suffix in ['.adoc', '.asc', '.asciidoc']:
+                    page = PageAsciidoc(srcdir, srcpath, self.template_engine)
+                else:
+                    page = PageFile(srcdir, srcpath)
+
+                for d in page.dstpaths:
+                    if d in dstpaths:
+                        log(f'WARNING: destination file overlapped: {d} from {page.srcpath}')
+                    dstpaths.append(d)
+
+                self.pages.append(page)
+
+        log(f'Loaded {len(self.pages)} files')
+
+    def generate(self, dstdir, indexupdate=None):
+        dstdir = Path(dstdir)
+        searchindex_path = 'searchindex.js'
+        searchindex_update = False
+
+        makedirs(dstdir)
+        current_dst = set(walk_site(dstdir))
+        next_dst = {Path(searchindex_path)}|{d for page in self.pages for d in page.dstpaths}
+        deleted_dst = current_dst - next_dst
+
+        if len(deleted_dst) > 0:
+            log(f'delete {len(deleted_dst)} abandoned files from destination directory')
+            for f in deleted_dst:
+                log(f'delete {f}')
+                remove(dstdir/f)
             searchindex_update = True
 
-    if indexupdate and searchindex_update:
-        log(f'making search index: {searchindex_path}')
-        open(dstdir/searchindex_path,'w').write(search_index(pages))
+        tl = self.template_engine.lastmodified
 
-def search_index(pages):
-    import json
-    jj = [page.search_json for page in pages if page.search_json]
-    return f"var data={json.dumps(jj)}"
+        def g(page):
+            sm = max(page.lastmodified, tl)
+            if page.need_update(sm, dstdir):
+                log(f'generating {page.url}...')
+                with report_exceptions():
+                    page.generate(dstdir)
+                return True
+            return False
+
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+        futures = [executor.submit(g, page) for page in self.pages]
+        searchindex_update |= any(f.result() for f in concurrent.futures.as_completed(futures))
+        executor.shutdown()
+
+        if indexupdate and searchindex_update:
+            log(f'making search index: {searchindex_path}')
+            open(dstdir/searchindex_path,'w').write(self.search_index(self.pages))
+
+    def search_index(self, pages):
+        import json
+        jj = [page.search_json for page in pages if page.search_json]
+        return f"var data={json.dumps(jj)}"
 
 def main():
     from argparse import ArgumentParser
@@ -514,11 +512,9 @@ def main():
 
     args = parser.parse_args()
 
-    inputdir = args.inputdir
-    outputdir = args.outputdir
-
-    if not inputdir:
+    if not args.inputdir:
         parser.error('no input directory')
         return
 
-    sitegen(inputdir, outputdir, args.templatedir, args.index_update)
+    site = Site(args.inputdir, args.templatedir)
+    site.generate(args.outputdir, args.index_update)
