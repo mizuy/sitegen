@@ -17,7 +17,7 @@ RegExp.escape= function(s) {
 
 //window.onload=function(){	document.getElementById("q").focus();  }
 
-var MAX_RESULTS = 50;
+var MAX_RESULTS = 20;
 
 function do_find(query){
 	if(!query || query.length<3){return}
@@ -42,7 +42,7 @@ function do_find(query){
 		var idx = result[i][1];
 		var len = result[i][2];
 		buf.push(
-			"<dt><a href='",d.url,"'>",d.title,"</a></dt>",
+			"<dt><a href='",d.url,"?keyword=",query,"'>",d.title,"</a></dt>",
 			"<dd>",d.content.substring(Math.max(0,idx-40),idx),
 		    "<b>",d.content.substring(idx,idx+len),"</b>",
 		    d.content.substring(idx+len,idx+len+80),"</dd>"

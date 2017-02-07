@@ -6,10 +6,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" type="text/css" href="{{root}}/css/w3.css">
 <link rel="stylesheet" type="text/css" href="{{root}}/css/w3-theme-teal.css">
-<script type="text/x-mathjax-config">
-  MathJax.Hub.Config({tex2jax: {inlineMath: [['$','$'], ['\\(','\\)']]}});
-</script>
+<script type="text/x-mathjax-config">MathJax.Hub.Config({tex2jax: {inlineMath: [['$','$'], ['\\(','\\)']]}});</script>
 <script type="text/javascript" async src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS_CHTML"></script>
+<script src="mark.min.js" charset="UTF-8"></script>
+<script type="text/javascript">
+var keyword = decodeURIComponent(location.search.match(/keyword=(.*?)(&|$)/)[1]);
+if(keyword){new Mark(document.querySelector("body")).mark(keyword);}</script>
 </head>
 
 <body>

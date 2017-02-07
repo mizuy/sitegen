@@ -488,10 +488,9 @@ class Site:
                 return True
             return False
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-        futures = [executor.submit(g, page) for page in self.pages]
-        searchindex_update |= any(f.result() for f in concurrent.futures.as_completed(futures))
-        executor.shutdown()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+            futures = [executor.submit(g, page) for page in self.pages]
+            searchindex_update |= any(f.result() for f in concurrent.futures.as_completed(futures))
 
         if indexupdate and searchindex_update:
             log(f'making search index: {searchindex_path}')
