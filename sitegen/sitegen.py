@@ -38,7 +38,7 @@ def remove(path):
         shutil.rmtree(path)
     else:
         os.remove(path)
-
+        
 def log(message):
     sys.stderr.write(f'{message}\n')
     sys.stderr.flush()
@@ -66,8 +66,14 @@ def walk_files(basedir):
         if p.is_file():
             yield p
 
-def generate_title_toc(body):
-    q = pq(body)
+def command_str(args, src=None, cwd=None):
+    if src and isinstance(src,str):
+        src = src.encode(PAGE_ENCODING)
+    out,err = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=cwd).communicate(input=src)
+    return '' if not out else out.decode(PAGE_ENCODING), '' if not err else err.decode(PAGE_ENCODING)
+
+def generate_title_toc_body(body):
+    q = pq(body).remove_namespaces()
     title = q('title').text()
     out = pq('<ul class="toc"></ul>')
 
@@ -89,7 +95,7 @@ def generate_title_toc(body):
         pp = get_last_child(out, level)
         pp.append(f'<li><a href="#{aname}">{tag.text()}</a></li>')
 
-    return title, out.wrap('<div id="toc"></div>').html()
+    return title, out.wrap('<div id="toc"></div>').html(), q('body').html()
 
 class TemplateEngine:
     def __init__(self, templatedir=None):
@@ -122,7 +128,8 @@ class TemplateEngine:
 class Pandoc:
     # based on https://github.com/bebraw/pypandoc/blob/master/pypandoc/pypandoc.py
     def __init__(self):
-        self.src_fmts, self.dst_fmts = self.get_formats()
+        self.src_fmts = command_str(['pandoc', '--list-input-formats'])[0].splitlines()
+        self.dst_fmts = command_str(['pandoc', '--list-output-formats'])[0].splitlines()
 
     def check_format(self, src_format, dst_format):
         if src_format not in self.src_fmts:
@@ -132,46 +139,20 @@ class Pandoc:
 
     def convert(self, src, src_format, dst_format, extra_args=[], cwd=None):
         self.check_format(src_format,dst_format)
-
-        args = ['pandoc', '--from='+src_format, '--to='+dst_format]
-        args.extend(extra_args)
-        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
-        data,error = p.communicate(src)
-        return data, error
+        data,error = command_str(['pandoc', '--from='+src_format, '--to='+dst_format] + extra_args, src)
+        return data,error
 
     def convert_write(self, src, src_format, dst_filename, dst_format, extra_args=[], cwd=None):
         self.check_format(src_format,dst_format)
-        args = ['pandoc', '--from='+src_format, '--to='+dst_format, '-o',dst_filename]
-        args.extend(extra_args)
-        p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
-        data,error = p.communicate(src)
+        data,error = command_str(['pandoc', '--from='+src_format, '--to='+dst_format, '-o',dst_filename] + extra_args, src)
         return data, error
 
-    def get_formats(self):
-        '''
-        Dynamic preprocessor for Pandoc formats.
-        Return 2 lists. "from_formats" and "to_formats".
-        '''
-        p = subprocess.Popen(['pandoc', '-h'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        t = p.communicate()[0]
-        help_text = t.decode('ascii').splitlines(False)
-        txt = ' '.join(help_text[1:help_text.index('Options:')])
-
-        aux = txt.split('Output formats: ')
-        in_ = aux[0].split('Input formats: ')[1].split(',')
-        out = aux[1].split(',')
-
-        return [f.strip() for f in in_], [f.strip() for f in out]
-
+    
 pandoc = Pandoc()
 
 def asciidoc_convert(src, extra_args=[], cwd=None):
-    args = ['asciidoctor', '-o', '-', '-']
     # args = ['asciidoc', '-a' 'mathjax', '-s', '-o', '-', '-']
-    args.extend(extra_args)
-    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
-    data,error = p.communicate(src)
-    return data, error
+    return command_str(['asciidoctor', '-o', '-', '-']+extra_args, src)
 
 class PageBase:
     """
@@ -350,16 +331,15 @@ class PageMarkdown(PageTemplated):
             t = y.get_path(pp) or self.gy.get_path(pp)
             if t:
                 extra_args.append(f'--{pp}={t}')
-
-        s,error = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.parent)
-        s = s.decode(PAGE_ENCODING)
-        if not s.strip() or error:
+        s,err = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.parent)
+        if not s.strip() or err:
             title = 'ERROR'
             toc = ''
-            body = f'<pre>{error.decode(PAGE_ENCODING)}</pre><div>{s}</div>'
+            body = f'<pre>{err}</pre><div>{s}</div>'
         else:
-            title, toc = generate_title_toc(s)
-            body = pq(s)('body').html()
+            title, toc, body = generate_title_toc_body(s)
+            if not body:
+                print('s:',s)
             body = body.replace('[TOC]', toc)
 
         metadata['title'] = title
@@ -401,14 +381,15 @@ class PageAsciidoc(PageTemplated):
         metadata = {}
 
         s,error = asciidoc_convert(source.encode(PAGE_ENCODING), cwd=self.srcfile.parent)
-        s = s.decode(PAGE_ENCODING)
         if not s.strip() or error:
             title = 'ERROR'
             toc = ''
-            body = f'<pre>{error.decode(PAGE_ENCODING)}</pre><div>{s}</div>'
+            body = f'<pre>{error}</pre><div>{s}</div>'
         else:
-            title, toc = generate_title_toc(s)
-            body = pq(s)('body').html().replace('[TOC]', toc)
+            title, toc, body = generate_title_toc_body(s)
+            if not body:
+                print('s:',s)
+            body = body.replace('[TOC]', toc)
 
         metadata['title'] = title
         metadata['toc'] = toc
