@@ -72,10 +72,10 @@ def command_str(args, src=None, cwd=None):
     out,err = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=cwd).communicate(input=src)
     return '' if not out else out.decode(PAGE_ENCODING), '' if not err else err.decode(PAGE_ENCODING)
 
-def generate_title_toc_body(body):
-    q = pq(body).remove_namespaces()
-    title = q('title').text()
-    out = pq('<ul class="toc"></ul>')
+def generate_title_toc_body(src):
+    # dirty 
+    q = pq(src.replace('xmlns="http://www.w3.org/1999/xhtml"',' '))
+    title = q('title').text() or q('h1').text() or q('h2').text() or ''
 
     def get_last_child(e, level):
         if level==0:
@@ -88,14 +88,43 @@ def generate_title_toc_body(body):
                 ee = e.children('ul:last-child')
             return get_last_child(ee, level-1)
 
+    out = pq('<ul></ul>')
     for tag in q('h1, h2, h3').items():
         level = int(tag[0].tag[1])-1
         assert(0<=level)
         aname = tag.attr('id')
         pp = get_last_child(out, level)
-        pp.append(f'<li><a href="#{aname}">{tag.text()}</a></li>')
+        pp.append(f'<li><a href="#{aname}">{tag.text()}</a></li>\n')
+    toc = out.html() or ""
 
-    return title, out.wrap('<div id="toc"></div>').html(), q('body').html()
+    body = q('body').html()
+
+    return title, toc, body
+
+class ConfigYaml:
+    def __init__(self, metadata, path, parent=None):
+        self.metadata = metadata
+        self.path = path
+        self.parent = parent
+
+    def get(self, name):
+        return self.metadata.get(name) or (self.parent.get(name) if self.parent else None)
+
+    def get_path(self, name):
+        a = self.metadata.get(name)
+        if a:
+            return self.path.parent.joinpath(a).resolve()
+        if parent:
+            return self.parent.get_path(name)
+        return None
+
+    @classmethod
+    def from_file(cls, path):
+        try:
+            m = yml.load(open(path).read())
+            return ConfigYaml(m, path)
+        except:
+            return ConfigYaml({}, Path('.'))
 
 class TemplateEngine:
     def __init__(self, templatedir=None):
@@ -213,12 +242,13 @@ class PageFile(PageBase):
         shutil.copy(self.srcfile, df)
 
 class PageTemplated(PageBase):
-    def __init__(self, basedir, srcpath, template_engine, default_template):
+    def __init__(self, basedir, srcpath, template_engine, default_template, config):
         super().__init__(basedir, srcpath)
         self.dstpath = srcpath.with_suffix('.html')
         self.url = str(self.dstpath)
         self.template_engine = template_engine
         self.default_template = default_template
+        self.config = config
 
         """
         parts = [(link, name)]
@@ -266,13 +296,13 @@ class PageTemplated(PageBase):
             names.pop()
         self.parts = [(rel_parent(dd-i), name) for i,name in enumerate(names)]
 
-    def render_template(self, contents, metadata={}):
-        metadata['contents'] = contents
+    def render_template(self, metadata={}):
         metadata['url'] = self.url
         metadata['root'] = self.root
         metadata['path'] = self.dstpath
         metadata['parts'] = self.parts
         metadata['mtime'] = self.srcfile.stat().st_mtime
+        metadata['sitename'] = self.config.get('sitename')
 
         template = metadata.get('template') or self.default_template
         return self.template_engine.render(template, metadata)
@@ -285,28 +315,9 @@ def load_metadata(source):
     else:
         return {}, source
 
-class ConfigYaml:
-    def __init__(self, metadata, path):
-        self.metadata = metadata
-        self.path = path
-
-    def get_path(self, name):
-        a = self.metadata.get(name)
-        if not a:
-            return None
-        return self.path.parent.joinpath(a).resolve()
-
-    @classmethod
-    def from_file(cls, path):
-        try:
-            m = yml.load(open(path).read())
-            return ConfigYaml(m, path)
-        except:
-            return ConfigYaml({}, Path('.'))
-
 class PageMarkdown(PageTemplated):
     def __init__(self, basedir, srcpath, template_engine, global_config):
-        super().__init__(basedir, srcpath, template_engine, MARKDOWN_TEMPLATE)
+        super().__init__(basedir, srcpath, template_engine, MARKDOWN_TEMPLATE, global_config)
         self.dstpathdocx = self.dstpath.with_suffix('.docx')
         self.gy = global_config
 
@@ -326,11 +337,8 @@ class PageMarkdown(PageTemplated):
         pantable = ['-F', str(PANTABLE)] if PANTABLE else []
         extra_args=['-s', '--mathjax'] + pantable
 
-        y = ConfigYaml(metadata, self.srcpath)
-        for pp in ['bibliography', 'csl']:
-            t = y.get_path(pp) or self.gy.get_path(pp)
-            if t:
-                extra_args.append(f'--{pp}={t}')
+        y = ConfigYaml(metadata, self.srcpath, self.gy)
+        # bib = Bibliography(y.get_path('bibliography'), y.get_path('csl'))
         s,err = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.parent)
         if not s.strip() or err:
             title = 'ERROR'
@@ -338,18 +346,17 @@ class PageMarkdown(PageTemplated):
             body = f'<pre>{err}</pre><div>{s}</div>'
         else:
             title, toc, body = generate_title_toc_body(s)
-            if not body:
-                print('s:',s)
             body = body.replace('[TOC]', toc)
 
         metadata['title'] = title
         metadata['toc'] = toc
+        metadata['contents'] = body
         metadata['source'] = source
 
         dstfile = dstbasedir.joinpath(self.dstpath)
         makedirs(dstfile.parent)
         with open(dstfile, 'wb') as f:
-            f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
+            f.write(self.render_template(metadata).encode(PAGE_ENCODING))
 
         if GENERATE_DOCX:
             refer = Path('reference.docx').resolve()
@@ -370,8 +377,8 @@ class PageMarkdown(PageTemplated):
             return [self.dstpath]
 
 class PageAsciidoc(PageTemplated):
-    def __init__(self, basedir, srcpath, template_engine):
-        super().__init__(basedir, srcpath, template_engine, ASCIIDOC_TEMPLATE)
+    def __init__(self, basedir, srcpath, template_engine, global_config):
+        super().__init__(basedir, srcpath, template_engine, ASCIIDOC_TEMPLATE, global_config)
 
     def generate(self, dstbasedir):
         dstfile = dstbasedir.joinpath(self.dstpath)
@@ -387,16 +394,15 @@ class PageAsciidoc(PageTemplated):
             body = f'<pre>{error}</pre><div>{s}</div>'
         else:
             title, toc, body = generate_title_toc_body(s)
-            if not body:
-                print('s:',s)
             body = body.replace('[TOC]', toc)
 
         metadata['title'] = title
         metadata['toc'] = toc
+        metadata['contents'] = body
         metadata['source'] = source
 
         with open(dstfile, 'wb') as f:
-            f.write(self.render_template(body, metadata).encode(PAGE_ENCODING))
+            f.write(self.render_template(metadata).encode(PAGE_ENCODING))
 
         if error:
             log(error)
@@ -428,7 +434,7 @@ class Site:
                 if suffix in ['.md', '.markdown']:
                     page = PageMarkdown(srcdir, srcpath, self.template_engine, self.config)
                 elif suffix in ['.adoc', '.asc', '.asciidoc']:
-                    page = PageAsciidoc(srcdir, srcpath, self.template_engine)
+                    page = PageAsciidoc(srcdir, srcpath, self.template_engine, self.config)
                 else:
                     page = PageFile(srcdir, srcpath)
 

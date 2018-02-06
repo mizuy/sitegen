@@ -1,10 +1,12 @@
-{% extends "base.j2.html" %}
+{% extends "default.j2.html" %}
 
 {% block contents %}
 {{ contents }}
-<h1>全文検索</h1>
+
 <input type="text" id="q" onkeyup="do_find(this.value)" autocomplete="off" placeholder="サイト内を検索"></input>
+<p>3文字以上のキーワードを入力すると全文検索します</p>
 <p><span id="stat">0</span>件見つかりました。</p>
+
 <div id="result"></div>
 {% endblock contents %}
 

@@ -2,4 +2,6 @@
    template: search.j2.html
 ---
 
-test
+% Search
+
+# 全文検索
