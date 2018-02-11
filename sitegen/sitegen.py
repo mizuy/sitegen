@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 
-# Static Site Generator powered by markdown and jinja2
-# Copyright (c) 2012-2017 MIZUGUCHI Yasuhiko
+# Static Site Generator powered by markdown ,pandoc and jinja2
+# Copyright (c) 2012-2018 MIZUGUCHI Yasuhiko
 # based on http://obraz.pirx.ru/
-# install requirements: Jinja2, PyYAML, pyquery, pandoc(from cabal), asciidoctor
+# install requirements: pandoc
 
 import sys, os, io, re, traceback, errno, subprocess
 import shutil, fnmatch, yaml, concurrent.futures
@@ -11,17 +11,16 @@ from contextlib import contextmanager
 from jinja2 import Environment, FileSystemLoader, ChoiceLoader, PackageLoader
 from jinja2.exceptions import TemplateSyntaxError
 from pathlib import Path
-from pyquery import PyQuery as pq
-
+from pyquery import PyQuery
+from urllib.parse import urlparse, urljoin
+import tqdm
 DEBUG = False
 PAGE_ENCODING = 'UTF-8'
 DEFAULT_TEMPLATE = 'default.j2.html'
 MARKDOWN_TEMPLATE = 'markdown.j2.html'
-ASCIIDOC_TEMPLATE = 'asciidoc.j2.html'
+INDEX_TEMPLATE = 'index.j2.html'
 CONFIG_YAML = 'config.yaml'
 DOCX_TEMPLATE = 'reference.docx'
-IGNORE_LIST = ['.', '.*','_', '*~', '#*#'] # TODO load ignore file
-GENERATE_DOCX = False
 PANTABLE = shutil.which('pantable')
 
 def makedirs(directory):
@@ -61,78 +60,61 @@ def report_exceptions():
             import pdb
             pdb.post_mortem(tb)
 
-def walk_files(basedir):
-    for p in Path(basedir).glob('**/*'):
-        if p.is_file():
-            yield p
-
 def command_str(args, src=None, cwd=None):
     if src and isinstance(src,str):
         src = src.encode(PAGE_ENCODING)
-    out,err = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=cwd).communicate(input=src)
+    out,err = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=cwd).communicate(input=src)
     return '' if not out else out.decode(PAGE_ENCODING), '' if not err else err.decode(PAGE_ENCODING)
 
-def generate_title_toc_body(src):
-    # dirty 
-    q = pq(src.replace('xmlns="http://www.w3.org/1999/xhtml"',' '))
-    title = q('title').text() or q('h1').text() or q('h2').text() or ''
-
-    def get_last_child(e, level):
-        if level==0:
-            return e
-        if level>0:
-            ee = e.children('ul:last-child')
-            if not ee:
-                #e.append('<li>no title</li>')
-                e.append('<ul></ul>')
-                ee = e.children('ul:last-child')
-            return get_last_child(ee, level-1)
-
-    out = pq('<ul></ul>')
-    for tag in q('h1, h2, h3').items():
-        level = int(tag[0].tag[1])-1
-        assert(0<=level)
-        aname = tag.attr('id')
-        pp = get_last_child(out, level)
-        pp.append(f'<li><a href="#{aname}">{tag.text()}</a></li>\n')
-    toc = out.html() or ""
-
-    body = q('body').html()
-
-    return title, toc, body
-
 class ConfigYaml:
-    def __init__(self, metadata, path, parent=None):
-        self.metadata = metadata
+    def __init__(self, path, yaml_src):
+        self.metadata = {}
         self.path = path
-        self.parent = parent
+        if yaml_src:
+            try:
+                self.metadata = yaml.load(yaml_src)
+            except:
+                log(f'error loading yaml: {path}')
 
     def get(self, name):
-        return self.metadata.get(name) or (self.parent.get(name) if self.parent else None)
+        return self.metadata.get(name)
 
-    def get_path(self, name):
+    def get_fullpath(self, name):
+        """ get fullpath of metadata[name] as relative path from self.path """
         a = self.metadata.get(name)
         if a:
             return self.path.parent.joinpath(a).resolve()
-        if parent:
-            return self.parent.get_path(name)
         return None
 
     @classmethod
     def from_file(cls, path):
-        try:
-            m = yml.load(open(path).read())
-            return ConfigYaml(m, path)
-        except:
-            return ConfigYaml({}, Path('.'))
+        return cls(path, open(path).read())
+        
+class LocalConfigYaml(ConfigYaml):
+    def __init__(self, path, yaml_src, parent):
+        super().__init__(path, yaml_src)
+        self.parent = parent
+
+    def get(self, name):
+        return self.get(name) or self.parent.get(name)
+
+    def get_fullpath(self, name):
+        return self.get_fullpath(name) or self.parent.get_fullpath(name)
+
 
 class TemplateEngine:
     def __init__(self, templatedir=None):
-        self.templatedir = templatedir
         self.defaultloader = PackageLoader("sitegen", "templates")
-        if templatedir:
+
+        self.templatedir = templatedir
+        if self.templatedir:
+            self.template_files = list(p for p in Path(templatedir).glob('**/*') if p.is_file())
+            if not self.template_files:
+                self.templatedir = None
+                
+        if self.templatedir:
             loader = ChoiceLoader([
-                FileSystemLoader(templatedir),
+                FileSystemLoader(self.templatedir),
                 self.defaultloader])
         else:
             loader = self.defaultloader
@@ -152,8 +134,11 @@ class TemplateEngine:
         lm = Path(__file__).stat().st_mtime
         if not self.templatedir:
             return lm
-        return max(lm, max(p.stat().st_mtime for p in walk_files(self.templatedir)))
+        tmp = max(p.stat().st_mtime for p in self.template_files)
+        return max(lm, tmp)
+        #return max(lm, max(p.stat().st_mtime for p in walk_files(self.templatedir)))
 
+    
 class Pandoc:
     # based on https://github.com/bebraw/pypandoc/blob/master/pypandoc/pypandoc.py
     def __init__(self):
@@ -188,14 +173,16 @@ class PageBase:
         Page knows dstpath, but don't know destination directory.
         basedir = base directory
         srcpath = src path
+        dstpath = srcpath or srcpath.with_suffix(something)
         srcfile = basepath + srcpath
-        dstfiles = dst_basedir + dstpaths
+        dstfile = dst_basedir + dstpath
     """
-    def __init__(self, basedir, srcpath):
-        self.basedir = Path(basedir)
+    def __init__(self, site, srcpath):
+        self.site = site
+        self.src_basedir = site.srcdir
         self.srcpath = Path(srcpath)
         self.dstpath = self.srcpath
-        self.srcfile = basedir / srcpath
+        self.srcfile = self.src_basedir / self.srcpath # fullpath
         self.url = str(self.dstpath)
         self.depth = len(self.dstpath.parts)-1
         self.root = '/'.join(['..'] * (self.depth)) if self.depth>0 else '.'
@@ -210,45 +197,43 @@ class PageBase:
         """
         return if dstination file (at basedirectory dstdir) needs update or not
         """
-        update = False
-        ds = (dstdir / d for d in self.dstpaths)
-        for d in ds:
-            if not d.is_file():
-                update = True
-            else:
-                if d.stat().st_mtime < lastmodified:
-                    update = True
-        return update
+        d = dstdir / self.dstpath
+        if not d.is_file():
+            return True
+        else:
+            if d.stat().st_mtime < lastmodified:
+                return True
+        return False
 
     @property
     def lastmodified(self):
         return self.srcfile.stat().st_mtime
-    @property
-    def dstpaths(self):
-        return [self.dstpath]
 
     @property
     def search_json(self):
-        return None
         return {'url': self.url, 'title': self.srcpath.stem, 'content': ''}
 
-class PageFile(PageBase):
-    def __init__(self, basepath, srcpath):
-        super().__init__(basepath, srcpath)
-
-    def generate(self, dstbasedir):
+    def make_dstdir(self, dstbasedir):
+        """make dstination dir and return destination file full path
+        """
         df = dstbasedir.joinpath(self.dstpath)
         makedirs(df.parent)
+        return df
+
+class PageFile(PageBase):
+    def __init__(self, site, srcpath):
+        super().__init__(site, srcpath)
+
+    def generate(self, dstbasedir):
+        df = self.make_dstdir(dstbasedir)
         shutil.copy(self.srcfile, df)
 
 class PageTemplated(PageBase):
-    def __init__(self, basedir, srcpath, template_engine, default_template, config):
-        super().__init__(basedir, srcpath)
+    def __init__(self, site, srcpath, default_template):
+        super().__init__(site, srcpath)
         self.dstpath = srcpath.with_suffix('.html')
         self.url = str(self.dstpath)
-        self.template_engine = template_engine
         self.default_template = default_template
-        self.config = config
 
         """
         parts = [(link, name)]
@@ -258,32 +243,32 @@ class PageTemplated(PageBase):
         (../../../index.html, Index) 0
         (../../index.html, a) 1
         (../index.html, b) 2
-        (., c) 3
+        (c.html, c) 3
 
         ex.
         a/b/index.html (dd=3)
         (../../../index.html, Index) 0
         (../../index.html, a) 1
         (../index.html, b) 2
-        (., b) 3
+        (index.html, b) 3
 
         a/b.html (dd=2)
         (../index.html, Index) 0
         (./index.html, a) 1
-        (., b) 2
+        (b.html, b) 2
 
         a.html (dd=1)
         (./index.html, Index) 0
-        (., a)
+        (a.html, a)
 
         index.html (dd=1)
-        (., Index) 0
+        (index.html, Index) 0
 
         """
 
         def rel_parent(n):
             if n==0:
-                return '.'
+                return self.dstpath.name
             elif n==1:
                 return './index.html'
             else:
@@ -301,124 +286,135 @@ class PageTemplated(PageBase):
         metadata['root'] = self.root
         metadata['path'] = self.dstpath
         metadata['parts'] = self.parts
-        metadata['mtime'] = self.srcfile.stat().st_mtime
-        metadata['sitename'] = self.config.get('sitename')
+        metadata['mtime'] = self.lastmodified
+        metadata['sitename'] = self.site.config.get('sitename')
+        metadata['site'] = self.site
+        metadata['page'] = self
 
         template = metadata.get('template') or self.default_template
-        return self.template_engine.render(template, metadata)
+        return self.site.template_engine.render(template, metadata)
 
-R_M = re.compile(r'\A\s*^---+\s*$(.*?)^---+\s*$(.*)\Z', re.M|re.DOTALL)
-def load_metadata(source):
-    m = R_M.match(source)
-    if m:
-        return yaml.load(m[1]) or {}, m[2]
-    else:
-        return {}, source
+class MarkdownHtml:
+    def __init__(self, src):
+        # dirty 
+        self.q = PyQuery(src.replace('xmlns="http://www.w3.org/1999/xhtml"',' '))
+        self.title = self.q('title').text() or self.q('h1').text() or self.q('h2').text() or ''
+        self.toc = self.get_toc()
+        self.body = self.q('body').html()
 
+    def get_toc(self):
+        def get_last_child(e, level):
+            if level==0:
+                return e
+            if level>0:
+                ee = e.children('ul:last-child')
+                if not ee:
+                    #e.append('<li>no title</li>')
+                    e.append('<ul></ul>')
+                    ee = e.children('ul:last-child')
+                return get_last_child(ee, level-1)
+    
+        out = PyQuery('<ul></ul>')
+        for tag in self.q('h1, h2, h3').items():
+            level = int(tag[0].tag[1])-1
+            assert(0<=level)
+            aname = tag.attr('id')
+            pp = get_last_child(out, level)
+            pp.append(f'<li><a href="#{aname}">{tag.text()}</a></li>\n')
+        return out.html() or ""
+
+    def get_links(self):
+        ll = []
+        for tag in self.q('a').items():
+            ll.append(tag.attr('href'))
+        return ll
+
+    
 class PageMarkdown(PageTemplated):
-    def __init__(self, basedir, srcpath, template_engine, global_config):
-        super().__init__(basedir, srcpath, template_engine, MARKDOWN_TEMPLATE, global_config)
-        self.dstpathdocx = self.dstpath.with_suffix('.docx')
-        self.gy = global_config
+    def __init__(self, site, srcpath):
+        super().__init__(site, srcpath, MARKDOWN_TEMPLATE)
 
     @property
     def search_json(self):
         source = open(self.srcfile, 'r').read()
-        metadata, content = load_metadata(source)
-        content = re.sub(r'\s+',' ',content)
+        yaml_src, source = PageMarkdown.split_metadata_block(source)
+        source = re.sub(r'\s+',' ',source)
         return {'url': self.url,
                 'title': self.srcpath.stem,
-                'content': self.srcpath.stem+' '+content}
+                'content': self.srcpath.stem+' '+source}
 
     def generate(self, dstbasedir):
-        source = open(self.srcfile, 'r').read()
-        metadata, content = load_metadata(source)
+        s = open(self.srcfile, 'r').read()
+        yaml_src, source = PageMarkdown.split_metadata_block(s)
+        y = LocalConfigYaml(self.srcpath, yaml_src, self.site.config)
+        # bib = Bibliography(y.get_fullpath('bibliography'), y.get_fullpath('csl'))
 
         pantable = ['-F', str(PANTABLE)] if PANTABLE else []
         extra_args=['-s', '--mathjax'] + pantable
 
-        y = ConfigYaml(metadata, self.srcpath, self.gy)
-        # bib = Bibliography(y.get_path('bibliography'), y.get_path('csl'))
-        s,err = pandoc.convert(content.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.parent)
+        s,err = pandoc.convert(source.encode(PAGE_ENCODING), 'markdown', 'html5', extra_args, cwd=self.srcfile.parent)
+        
         if not s.strip() or err:
-            title = 'ERROR'
-            toc = ''
-            body = f'<pre>{err}</pre><div>{s}</div>'
-        else:
-            title, toc, body = generate_title_toc_body(s)
-            body = body.replace('[TOC]', toc)
+            s = f'<html><head><title>ERROR {self.srcpath}</title></head><body><pre>{err}</pre><div>{s}</div></body></html>'
 
-        metadata['title'] = title
-        metadata['toc'] = toc
-        metadata['contents'] = body
+        parse = MarkdownHtml(s)
+        # body = body.replace('[TOC]', toc)
+
+        metadata = y.metadata
+        metadata['title'] = parse.title
+        metadata['toc'] = parse.toc
+        metadata['body'] = parse.body
         metadata['source'] = source
+        metadata['siblings'] = self.site.get_siblings(self.dstpath)
+        metadata['not_linked'] = self.site.get_siblings_not_linked(self.dstpath, parse.get_links())
 
-        dstfile = dstbasedir.joinpath(self.dstpath)
-        makedirs(dstfile.parent)
+        dstfile = self.make_dstdir(dstbasedir)
         with open(dstfile, 'wb') as f:
             f.write(self.render_template(metadata).encode(PAGE_ENCODING))
 
-        if GENERATE_DOCX:
-            refer = Path('reference.docx').resolve()
-            s,error = pandoc.convert_write(content.encode(PAGE_ENCODING),
-                                           'markdown',
-                                           self.dstbasedir.joinpath(self.dstpathdocx).resolve(),
-                                           'docx',
-                                           extra_args=[f"--reference-docx={refer}"]+pantable,
-                                           cwd=self.srcfile.parent)
-            if error:
-                log(error)
-
-    @property
-    def dstpaths(self):
-        if GENERATE_DOCX:
-            return [self.dstpath, self.dstpathdocx]
-        else:
-            return [self.dstpath]
-
-class PageAsciidoc(PageTemplated):
-    def __init__(self, basedir, srcpath, template_engine, global_config):
-        super().__init__(basedir, srcpath, template_engine, ASCIIDOC_TEMPLATE, global_config)
-
-    def generate(self, dstbasedir):
-        dstfile = dstbasedir.joinpath(self.dstpath)
-        makedirs(dstfile.parent)
-
-        source = open(self.srcfile, 'r').read()
-        metadata = {}
-
-        s,error = asciidoc_convert(source.encode(PAGE_ENCODING), cwd=self.srcfile.parent)
-        if not s.strip() or error:
-            title = 'ERROR'
-            toc = ''
-            body = f'<pre>{error}</pre><div>{s}</div>'
-        else:
-            title, toc, body = generate_title_toc_body(s)
-            body = body.replace('[TOC]', toc)
-
-        metadata['title'] = title
-        metadata['toc'] = toc
-        metadata['contents'] = body
-        metadata['source'] = source
-
-        with open(dstfile, 'wb') as f:
-            f.write(self.render_template(metadata).encode(PAGE_ENCODING))
-
+    def generate_docx(self, dstbasedir):
+        s = open(self.srcfile, 'r').read()
+        yaml_src, source = PageMarkdown.split_metadata_block(s)
+        refer = Path('reference.docx').resolve()
+        s,error = pandoc.convert_write(source.encode(PAGE_ENCODING),
+                                       'markdown',
+                                       dstbasedir.joinpath(self.dstpathdocx).resolve(),
+                                       'docx',
+                                       extra_args=[f"--reference-docx={refer}"]+pantable,
+                                       cwd=self.srcfile.parent)
         if error:
             log(error)
 
-def is_ignored(filepath, ignore_list=IGNORE_LIST):
-    for ignore in ignore_list:
-        if any(fnmatch.fnmatch(part, ignore) for part in filepath.parts):
-            return True
-    return False
 
-def walk_site(basedir):
-    for path in walk_files(basedir):
-        if is_ignored(path):
-            continue
-        yield path.relative_to(basedir)
+    R_M = re.compile(r'\A\s*^---+\s*$(.*?)^---+\s*$(.*)\Z', re.M|re.DOTALL)
+    @classmethod
+    def split_metadata_block(cls, source):
+        m = cls.R_M.match(source)
+        if m:
+            return m[1], m[2].lstrip()
+        else:
+            return '', source
 
+class PageIndex(PageTemplated):
+    def __init__(self, site, srcpath):
+        super().__init__(site, srcpath, INDEX_TEMPLATE)
+
+    def generate(self, dstbasedir):
+        metadata = {}
+        metadata['title'] = f"Index of {self.dstpath.parent}"
+        metadata['toc'] = ''
+        metadata['body'] = ''
+        metadata['source'] = ''
+        metadata['siblings'] = self.site.get_siblings(self.dstpath)
+
+        dstfile = self.make_dstdir(dstbasedir)
+        with open(dstfile, 'wb') as f:
+            f.write(self.render_template(metadata).encode(PAGE_ENCODING))
+
+    @property
+    def lastmodified(self):
+        return 0
+            
 class Site:
     def __init__(self, srcdir, templatedir=None):
         self.srcdir = Path(srcdir)
@@ -427,34 +423,76 @@ class Site:
         self.config = ConfigYaml.from_file(CONFIG_YAML)
 
         dstpaths = []
-        for srcpath in walk_site(srcdir):
+        for srcpath in self.walk_site(srcdir):
             suffix = srcpath.suffix
 
             with report_exceptions():
                 if suffix in ['.md', '.markdown']:
-                    page = PageMarkdown(srcdir, srcpath, self.template_engine, self.config)
-                elif suffix in ['.adoc', '.asc', '.asciidoc']:
-                    page = PageAsciidoc(srcdir, srcpath, self.template_engine, self.config)
+                    page = PageMarkdown(self, srcpath)
                 else:
-                    page = PageFile(srcdir, srcpath)
+                    page = PageFile(self, srcpath)
 
-                for d in page.dstpaths:
-                    if d in dstpaths:
-                        log(f'WARNING: destination file overlapped: {d} from {page.srcpath}')
-                    dstpaths.append(d)
+                if page.dstpath in dstpaths:
+                    log(f'WARNING: destination file overlapped: dst={page.dstpath}, src={page.srcpath}')
+                dstpaths.append(page.dstpath)
 
                 self.pages.append(page)
 
+        for srcpath in self.walk_site(srcdir,get_dir=True):
+            with report_exceptions():
+                index = srcpath / Path('index.html')
+                if not index in dstpaths:
+                    page = PageIndex(self, index)
+                    self.pages.append(page)
+
         log(f'Loaded {len(self.pages)} files')
 
-    def generate(self, dstdir, indexupdate=None):
+    def is_ignored(self, filepath, ignore_list=['.', '.*','_', '*~', '#*#']):
+        for ignore in ignore_list:
+            if any(fnmatch.fnmatch(part, ignore) for part in filepath.parts):
+                return True
+        return False
+
+    def walk_site(self, basedir, get_dir=False):
+        for p in Path(basedir).glob('**/*'):
+            if self.is_ignored(p):
+                continue
+            if (p.is_file() and not get_dir) or (p.is_dir() and get_dir):
+                yield p.relative_to(basedir)
+        
+    def get_siblings(self, dstpath):
+        def is_siblings(a, b):
+            if a==b:
+                return None
+            if a.parent==b.parent:
+                return True
+            if a.parent==b.parent.parent and b.name=='index.html':
+                return True
+            return False
+        return {str(page.dstpath.relative_to(dstpath.parent)) for page in self.pages if is_siblings(dstpath, page.dstpath)}
+        
+    def get_siblings_not_linked(self, dstpath, hrefs):
+        sibs = self.get_siblings(dstpath)
+
+        def href_to_path(href):
+            result = urlparse(href)
+            if result.netloc:
+                return None
+            else:
+                return result.path
+                #return urljoin(str(dstpath), result.path)
+
+        links = {href_to_path(href) for href in hrefs} - {None}
+        return list(sibs - links)
+
+    def generate(self, dstdir, indexupdate):
         dstdir = Path(dstdir)
         searchindex_path = 'searchindex.js'
         searchindex_update = False
 
         makedirs(dstdir)
-        current_dst = set(walk_site(dstdir))
-        next_dst = {Path(searchindex_path)}|{d for page in self.pages for d in page.dstpaths}
+        current_dst = set(self.walk_site(dstdir))
+        next_dst = {Path(searchindex_path)}|{page.dstpath for page in self.pages}
         deleted_dst = current_dst - next_dst
 
         if len(deleted_dst) > 0:
@@ -469,15 +507,17 @@ class Site:
         def g(page):
             sm = max(page.lastmodified, tl)
             if page.need_update(sm, dstdir):
-                log(f'generating {page.url}...')
+                #log(f'generating {page.url}...')
                 with report_exceptions():
                     page.generate(dstdir)
                 return True
             return False
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=7) as executor:
             futures = [executor.submit(g, page) for page in self.pages]
-            searchindex_update |= any(f.result() for f in concurrent.futures.as_completed(futures))
+            for f in tqdm.tqdm(concurrent.futures.as_completed(futures), total=len(futures), unit='file'):
+                pass
+            searchindex_update |= any(f.result() for f in futures)
 
         if indexupdate and searchindex_update:
             log(f'making search index: {searchindex_path}')

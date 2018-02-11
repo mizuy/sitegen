@@ -1,42 +1,63 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
-<head>
-<title>{{title or url}}{{' - ' if sitename and (title or url)}}{{sitename}}</title>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" type="text/css" href="{{root}}/css/w3.css">
-<link rel="stylesheet" type="text/css" href="{{root}}/css/w3-theme-teal.css">
-<script type="text/x-mathjax-config">MathJax.Hub.Config({tex2jax: {inlineMath: [['$','$'], ['\\(','\\)']]}});</script>
-<script type="text/javascript" async src="https://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS_CHTML"></script>
-<script src="mark.min.js" charset="UTF-8"></script>
-<script type="text/javascript">
-var keyword = decodeURIComponent(location.search.match(/keyword=(.*?)(&|$)/)[1]);
-if(keyword){new Mark(document.querySelector("body")).mark(keyword);}</script>
-</head>
+  <head>
+    <title>{{title or url}}{{' - ' if sitename and (title or url)}}{{sitename}}</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no"/>
+    <link rel="stylesheet" href="{{root}}/css/bootstrap.min.css" />
+    <link rel="stylesheet" type="text/css" href="{{root}}/css/my.css"/>
+    <script type="text/x-mathjax-config">MathJax.Hub.Config({tex2jax: {inlineMath: [['$','$'], ['\\(','\\)']]}});</script>
+    <script type="text/javascript" async
+            src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.2/MathJax.js?config=TeX-MML-AM_CHTML">
+    </script>
+  </head>
+  <body  data-spy="scroll" data-target="#sidebar" data-offset="100">
+    <div class="container-fluid ">
+      <nav class="navbar navbar-expand-md navbar-dark bg-dark fixed-top">
+        <a class="navbar-brand" href="{{root}}/index.html">{{sitename}}</a>
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="ナビゲーションの切替">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbar">
+          <ul class="navbar-nav mr-auto">
+            {% for link, name in parts[1:] %}
+            <li class="nav-item"><a class="nav-link" href="{{link}}">{{name}}</a></li>
+            {% endfor %}
+          </ul>
+          <form class="form-inline my-2 my-md-0">
+            <a class="nav-link" href="{{root}}/search.html">Search</a>
+          </form>
+        </div>
+      </nav>
+    </div>
+    <main>
+      <div class="container-fluid" id="content">
+        <div class="row">
+          <nav class="col-md-2 col-lg-3 d-none d-md-block sidebar" id="sidebar">
+            <div>
+              <ul class="nav nav-pills flex-column">{{toc.replace("<li",'<li class="nav-item"').replace('<a','<a class="nav-link"')}}</ul>
+            </div>
+          </nav>
+          <div class="col-12 col-md-10 col-lg-9 ml-sm-auto my-auto">
+            <div id="main">
+              {% block main %}{{ body }}{% endblock main %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <footer class="footer">
+      (C) 2016 mizuy, gnerated by <a href="https://github.com/mizuy/sitegen">sitegen</a>, Python, pandoc, asciidoc, bootstrap4.
+    </footer>
 
-<body>
-<nav>
-  <a href="{{root}}/index.html">{{sitename}}</a>
-  <ul>
-{% for link, name in parts %}
-    <li><a href="{{link}}">{{name}}</a></li>
-{% endfor %}
-  </ul>
-</nav>
-<div class="w3-main">
-  <header class="w3-container w3-theme w3-padding-32">
-    <a href="{{root}}/index.html">{{sitename}}</a>
-    <h1 class="w3-xxlarge w3-padding-16">{{title}}</h1>
-  </header>
-
-  <div id="main" class="w3-container w3-padding-32">
-  {% block contents %}{{ contents }}{% endblock contents %}
-  </div>
-
-  <footer class="w3-container w3-theme">
-  <p class="text-muted">(C) 2016 mizuy, gnerated by <a href="https://github.com/mizuy/sitegen">sitegen</a>, Python, pandoc, asciidoc, w3.css.</p>
-  </footer>
-</div>
-{% block scripts %}{{ scripts }}{% endblock scripts %}
-</body>
+    <script src="{{root}}/js/jquery-3.2.1.slim.min.js" ></script>
+    <script src="{{root}}/js/popper.min.js" ></script>
+    <script src="{{root}}/js/bootstrap.min.js" ></script>
+    <script src="{{root}}/js/mark.min.js" charset="UTF-8"></script>
+    <script type="text/javascript">
+      var keyword = decodeURIComponent(location.search.match(/keyword=(.*?)(&|$)/)[1]);
+      if(keyword){new Mark(document.querySelector("body")).mark(keyword);}
+    </script>
+    {% block scripts %}{{ scripts }}{% endblock scripts %}
+  </body>
 </html>

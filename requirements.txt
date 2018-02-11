@@ -1,0 +1,7 @@
+cssselect==1.0.3
+Jinja2==2.10
+lxml==4.1.1
+MarkupSafe==1.0
+pyquery==1.4.0
+PyYAML==3.12
+-e git+https://github.com/mizuy/sitegen.git@90c78fb4fa6fb278f65ba76ee04ea4b6d47f4845#egg=sitegen&subdirectory=../../sitegen

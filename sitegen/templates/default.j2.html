@@ -1,8 +1,4 @@
 {% extends "base.j2.html" %}
-{% set sitename = 'Example Site' %}
-{% block contents %}
-    {% if title %}
-    <h1>{{title}}</h1>
-    {% endif %}
-	{{ contents }}
-{% endblock contents %}
+{% block main %}
+	{{ body }}
+{% endblock main %}

@@ -1,10 +1,7 @@
-{% extends "base.j2.html" %}
-{% block contents %}
-    {% if title %}
-    <h1>{{title}}</h1>
-    {% endif %}
-    {{ contents }}
+{% extends "default.j2.html" %}
+{% block main %}
+    {{ body }}
     <hr />
     <h3> source code of this page.</h3>
     <pre class="source">{{ source }}</pre>
-{% endblock contents %}
+{% endblock main %}
