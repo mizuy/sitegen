@@ -41,20 +41,11 @@ Mac OS X Sierra, Brew's python, direnv
 
 ## Pandoc
 
-1. Install Haskell-platform
-2. set $PATH to $CABALDIR
-3. Install pandoc, pandoc-citeproc
-
-    % cabal install pandoc
-    % cabal install pandoc-citeproc
-
-4. test run
-
-    % pandoc -v
-    pandoc 1.16.0.2
-
-今は brew cask install haskell-platform ?? or brew install pandoc ??
-
+    > uninstall-hs
+    ...
+    > brew cask install haskell-platform
+    > nano .config/fish/config.fish
+    > cabal install pandoc
     > pandoc -v
     pandoc 2.1.1
     Compiled with pandoc-types 1.17.3.1, texmath 0.10.1.1, skylighting 0.6
